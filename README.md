@@ -109,7 +109,7 @@ DSH 3.x wrote the same ledger format 1 under `$DSH_HOME/bench/`. Nothing is read
 
 - Unit tests (`tests/`, Vitest, `pnpm test`): registry, declarative suites, graders, the `dsh-native` conformance check (every grader passes a correct run and fails a wrong one), metrics over sessions written and read through the rc.2 JSONL backend, the runtime with a fake launcher (isolation, timeout, resume, abort, unmeasurable runs), the run manager (candidates, the generated profile, variants, progress, key redaction, a plugin that did not activate, the unpriced and spending stops, refusal of a second job, stop killing the child), analysis, the strict record schema, the legacy import, the read API, the results render in English and Chinese, and the command line.
 - Plugin test (`tools/plugin-test.mjs`, `pnpm test:plugin`): the published baseline `dsh` CLI installs the built package into a scratch profile; a ledger is imported with the built `lib/cli.js` under plain Node; the booted profile's probe reads it through `solarBenchLedgers` and lists the run choices through `solarBenchRuns`.
-- Installed app: the tab, the catalog and an imported ledger's results were inspected in the Desktop app. No paid run from the tab has been observed.
+- Installed app: the tab and an imported ledger's results were inspected in the Desktop app on an earlier build of the same source; the current catalog has not been observed in the app yet. No paid run from the tab has been observed.
 
 ## Development
 

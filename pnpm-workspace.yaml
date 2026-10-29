@@ -1,0 +1,8 @@
+# Dependencies of the dsh CLI used only by the plugin test; none needs its install script here.
+allowBuilds:
+  '@deepseek-ai/dsh-subprocess-local': false
+  '@google/genai': false
+  esbuild: false
+  koffi: false
+  node-pty: false
+  protobufjs: false

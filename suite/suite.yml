@@ -1,0 +1,6 @@
+id: dsh-native
+version: "2"
+description: Coding tasks on DSH's own tool surface, graded by test commands, file contents, and tool usage.
+# Floor (保底): in codegraph-ablation-1 (84 runs) baseline and variant both passed 100%.
+tier: floor
+tags: [coding, tools]

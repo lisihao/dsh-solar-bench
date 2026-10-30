@@ -9,7 +9,7 @@
 import type { DataSource, DatasetRow, DatasetStore } from './datasets.js';
 import type { BenchSuite, BenchTask } from './types.js';
 /** Category tabs, in display order. */
-export declare const CATEGORY_IDS: readonly ["agent", "coding", "general", "math", "long-context", "preference", "long-horizon", "science", "harness"];
+export declare const CATEGORY_IDS: readonly ["agent", "coding", "general", "math", "long-context", "preference", "long-horizon", "rsi", "science", "harness"];
 /** One category tab. */
 export type CategoryId = typeof CATEGORY_IDS[number];
 /** Text in both UI languages. */
@@ -22,8 +22,20 @@ export declare const CATEGORIES: Readonly<Record<CategoryId, {
     title: Bilingual;
     purpose: Bilingual;
 }>>;
+/**
+ * Editorial tier: `floor` (保底) benchmarks are expected to sit near full marks
+ * with the default driver, so a run checks that nothing regressed; `ceiling`
+ * (摸高) benchmarks leave room for a plugin to show a gain. The tier is a
+ * classification as of 2026-10-30, not a measurement; see `saturatedRow`.
+ */
+export type BenchTier = 'floor' | 'ceiling';
+/** Tier titles and one-line purposes. */
+export declare const TIERS: Readonly<Record<BenchTier, {
+    title: Bilingual;
+    purpose: Bilingual;
+}>>;
 /** Why a listed benchmark is not run here. */
-export type Blocker = 'expert-grading' | 'checkers' | 'docker' | 'gated' | 'multi-turn' | 'images' | 'generator' | 'pairwise' | 'human-votes' | 'not-public' | 'no-license' | 'large-data' | 'test-harness' | 'browser';
+export type Blocker = 'harbor' | 'expert-grading' | 'checkers' | 'docker' | 'gated' | 'multi-turn' | 'images' | 'generator' | 'pairwise' | 'human-votes' | 'not-public' | 'no-license' | 'large-data' | 'test-harness' | 'browser';
 /** Explanation of each blocker. */
 export declare const BLOCKERS: Readonly<Record<Blocker, Bilingual>>;
 /** Turns fetched rows into tasks. */
@@ -52,6 +64,8 @@ export interface CatalogEntry {
     id: string;
     /** Category tab. */
     category: CategoryId;
+    /** Editorial tier. */
+    tier: BenchTier;
     /** Display name (a proper name, the same in both languages). */
     name: string;
     /** What it measures. */

@@ -11,7 +11,7 @@
  * environment.
  * @module @lisihao/dsh-solar-bench/runs
  */
-import type { Bilingual, CategoryId } from './catalog.js';
+import type { BenchTier, Bilingual, CategoryId } from './catalog.js';
 import type { DatasetStore } from './datasets.js';
 import type { JudgeReply } from './judge.js';
 import type { DriverOption, ProviderPlugin } from './providers.js';
@@ -49,6 +49,7 @@ export declare const DEEPSEEK_KEY_ENV = "DEEPSEEK_API_KEY";
 export interface BenchCatalogItem {
     id: string;
     category: CategoryId;
+    tier: BenchTier;
     name: string;
     summary: Bilingual;
     source: {

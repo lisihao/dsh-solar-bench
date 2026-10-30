@@ -4,7 +4,7 @@
  * does it change cost or speed, and how did that move across its versions.
  * @module @lisihao/dsh-solar-bench/insights
  */
-import type { CategoryId } from './catalog.js';
+import type { BenchTier, CategoryId } from './catalog.js';
 import type { AnalysisOptions, LedgerSnapshot, Verdict } from './types.js';
 /** One scoreboard column: the baseline under one driver, or one plugin. */
 export interface ScoreColumn {
@@ -38,12 +38,31 @@ export interface ScoreCell {
 export interface ScoreRow {
     benchmark: string;
     category: CategoryId | 'other';
+    /** The catalog entry's editorial tier; absent for a benchmark no longer in the catalog. */
+    tier?: BenchTier;
     name: string;
     metric: 'pass' | 'score';
     cells: Record<string, ScoreCell>;
+    /** See `saturatedRow`. */
+    saturated: boolean;
     /** The row's latest experiment; cells from it compare directly. */
     latest: string;
 }
+/** Baseline success at or above this reads as saturated. */
+export declare const SATURATION_SUCCESS = 0.9;
+/** Fewest valid baseline runs that can show saturation. */
+export declare const SATURATION_MIN_RUNS = 10;
+/**
+ * Whether a scoreboard row shows its benchmark saturated: a baseline cell from
+ * the row's latest experiment (not an earlier one) with at least
+ * `SATURATION_MIN_RUNS` valid runs at `SATURATION_SUCCESS` or more. Only
+ * pass-rate rows qualify; a judge's mean score near 0.9 is not saturation.
+ * The result never changes the benchmark's declared tier.
+ * @param row - the scoreboard row.
+ * @param columns - the scoreboard columns.
+ * @returns whether the row is saturated.
+ */
+export declare function saturatedRow(row: ScoreRow, columns: readonly ScoreColumn[]): boolean;
 /** Evaluation settings of the experiments behind a scoreboard. */
 export interface ScoreConfig {
     experiment: string;

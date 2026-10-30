@@ -44,7 +44,7 @@ async function runProbe(ctx) {
     assert(detail.analysis.comparisons[0]?.verdict === 'insufficient', `verdict ${detail.analysis.comparisons[0]?.verdict}`)
     checks.verdict = true
     const choices = await ctx.get('solarBenchRuns').choices()
-    assert(choices.categories.length === 9 && choices.categories[0].id === 'agent' && choices.categories[8].id === 'harness', `categories ${JSON.stringify(choices.categories.map(c => c.id))}`)
+    assert(choices.categories.length === 10 && choices.categories[0].id === 'agent' && choices.categories[9].id === 'harness', `categories ${JSON.stringify(choices.categories.map(c => c.id))}`)
     assert(choices.models.map(m => m.model).join() === 'deepseek-flash,deepseek-v4-pro', `models ${JSON.stringify(choices.models)}`)
     assert(JSON.stringify(choices.plugins.map(plugin => plugin.name)) === JSON.stringify(['@lisihao/dsh-solar-bench-probe']), `choices list ${JSON.stringify(choices.plugins)}`)
     assert(choices.credential === false, 'a scrubbed home must report no credential')
@@ -52,6 +52,8 @@ async function runProbe(ctx) {
     const runnable = choices.catalog.filter(item => item.status === 'runnable').map(item => item.id)
     assert(runnable.includes('gsm8k') && runnable.includes('mt-bench') && !runnable.includes('swe-bench-verified'), `runnable ${runnable}`)
     assert(choices.catalog.find(item => item.id === 'swe-bench-verified')?.reason?.en.includes('Docker'), 'blocked rows carry a reason')
+    assert(choices.catalog.find(item => item.id === 'gsm8k')?.tier === 'floor' && choices.catalog.find(item => item.id === 'rsi-exam')?.tier === 'ceiling', 'catalog rows carry their tier')
+    assert(choices.categories.some(category => category.id === 'rsi') && choices.catalog.find(item => item.id === 'rsi-exam')?.category === 'rsi', 'the RSI category reaches the client')
     checks.catalog = true
     const insights = await ledgers.insights()
     assert(insights.rows.length === 1 && insights.rows[0].benchmark === 'dsh-native' && insights.rows[0].category === 'harness', `insights rows ${JSON.stringify(insights.rows)}`)

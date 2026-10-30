@@ -4,9 +4,10 @@
  * starts an experiment with a sample, a driver, plugins to compare and a budget.
  */
 import { type ReactElement } from 'react';
+import type { BenchTier } from './catalog.js';
 import type { BenchLedgersApi } from './contracts.js';
 import { type BenchT } from './format.js';
-import type { BenchJobStatus, BenchRunChoices, BenchStartInput } from './runs.js';
+import type { BenchCatalogItem, BenchJobStatus, BenchRunChoices, BenchStartInput } from './runs.js';
 /** The run controls as the page calls them. */
 export interface BenchRunsApi {
     choices(): Promise<BenchRunChoices>;
@@ -16,6 +17,18 @@ export interface BenchRunsApi {
     status(): Promise<BenchJobStatus>;
     stop(): Promise<BenchJobStatus>;
 }
+/** Tier pills: 保底 (floor) and 摸高 (ceiling). */
+export declare const TIER_PILL: Readonly<Record<BenchTier, (key?: string) => ReactElement>>;
+/** Shown when the latest baseline of a pass-rate benchmark sits at 90% or more over at least 10 runs. */
+export declare const SATURATED_PILL: (key?: string) => ReactElement;
+/** One catalog card. */
+export declare function BenchmarkCard({ item, latest, saturated, onRun, active }: {
+    readonly item: BenchCatalogItem;
+    readonly latest: string | undefined;
+    readonly saturated: boolean;
+    readonly onRun: () => void;
+    readonly active: boolean;
+}): ReactElement;
 /** The whole Benchmarks View. */
 export declare function BenchPage({ ledgers, runs, mountError, t }: {
     readonly ledgers: BenchLedgersApi | undefined;

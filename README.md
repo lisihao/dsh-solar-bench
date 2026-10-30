@@ -39,6 +39,14 @@ Open any started conversation. Its View tab bar (next to Chat and Trajectory) ha
 
 Rows are fetched when an experiment starts — Hugging Face datasets-server for parquet datasets (only the sampled rows), or whole files at a pinned commit — and never shipped with the plugin. A rate-limited or failed request (429, 5xx) is retried up to five times, honoring `Retry-After`.
 
+## Floor and ceiling
+
+Every catalog row carries an editorial tier, shown as a pill on its card and in the scoreboard: **保底 / Floor** benchmarks are expected to sit near full marks with the default driver, so a run checks that nothing got worse; **摸高 / Ceiling** benchmarks leave room for a plugin to show a gain. The tiers are a classification as of 2026-10-30, not a measurement; one benchmark listed in two categories (SWE-bench Verified) has one tier.
+
+**已饱和 / Saturated** is the measured part: a pass-rate benchmark is marked saturated when a baseline cell from its row's latest experiment has at least 10 valid runs at 90% or more. Cells from earlier experiments (the † cells) and judged mean scores never count. The badge never changes the declared tier.
+
+The **递归自我改进（RSI）** tab lists RSI-Exam (`RSI-Exam/RSI-Exam`, MIT, revision `66f5493`): only its 27 CPU-only public tasks are in scope, up to 12 hours each. It is not runnable yet: its tasks run in Docker containers managed by the Harbor framework, and the runner that makes DSH a Harbor agent is not built. Its best published mean, 0.464, is over all 88 tasks and is not comparable to a CPU-only subset.
+
 ## Drivers
 
 The model list has three groups:

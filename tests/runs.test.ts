@@ -202,7 +202,7 @@ describe('BenchRunManager', () => {
   it('offers the categories, the catalog with reasons, plugins, driver models and the credential state', async () => {
     const manager = await mount()
     const choices = await manager.choices()
-    expect(choices.categories.map(category => category.id)).toEqual(['agent', 'coding', 'general', 'math', 'long-context', 'preference', 'long-horizon', 'science', 'harness'])
+    expect(choices.categories.map(category => category.id)).toEqual(['agent', 'coding', 'general', 'math', 'long-context', 'preference', 'long-horizon', 'rsi', 'science', 'harness'])
     expect(choices.catalog.find(item => item.id === 'gsm8k')).toMatchObject({ category: 'math', status: 'runnable', metric: 'pass', judged: false, license: 'MIT' })
     expect(choices.catalog.find(item => item.id === 'mt-bench')).toMatchObject({ status: 'runnable', metric: 'score', judged: true })
     expect(choices.catalog.find(item => item.id === 'gaia')).toMatchObject({ status: 'blocked', reason: { en: expect.stringMatching(/gated/) } })

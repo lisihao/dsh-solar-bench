@@ -5,7 +5,7 @@
  */
 
 import { createElement as h, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement, type ReactNode } from 'react'
-import type { Bilingual, CategoryId } from './catalog.js'
+import type { BenchTier, Bilingual, CategoryId } from './catalog.js'
 import type { BenchExperimentDetail, BenchExperimentList, BenchLedgersApi } from './contracts.js'
 import { fill, NO_GLOBAL_SKILLS, type BenchT } from './format.js'
 import type { BenchInsights, PluginComparison, ScoreColumn } from './insights.js'
@@ -62,6 +62,15 @@ const S = {
 
 const pill = (text: string, color: string, background: string, key?: string): ReactElement =>
   h('span', { key, style: { display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600, color, background, whiteSpace: 'nowrap' } }, text)
+
+/** Tier pills: 保底 (floor) and 摸高 (ceiling). */
+export const TIER_PILL: Readonly<Record<BenchTier, (key?: string) => ReactElement>> = {
+  floor: key => pill(tx('保底', 'Floor'), C.muted, C.hover, key),
+  ceiling: key => pill(tx('摸高', 'Ceiling'), C.brand, C.hover, key),
+}
+
+/** Shown when the latest baseline of a pass-rate benchmark sits at 90% or more over at least 10 runs. */
+export const SATURATED_PILL = (key?: string): ReactElement => pill(tx('已饱和', 'Saturated'), C.warn, C.warnSoft, key)
 
 const STATUS_PILL: Readonly<Record<BenchCatalogItem['status'], () => ReactElement>> = {
   runnable: () => pill(tx('可运行', 'Runnable'), C.good, C.goodSoft),
@@ -156,6 +165,7 @@ function Scoreboard({ insights, choices, names }: { readonly insights: BenchInsi
         index === 0 ? h('th', { key: 'cat', rowSpan: group.rows.length, scope: 'rowgroup', style: { ...td, textAlign: 'left', fontSize: 13, fontWeight: 600, borderRight: `1px solid ${C.line}`, whiteSpace: 'normal' } }, title(group.category)) : null,
         h('th', { key: 'bench', scope: 'row', style: { ...td, textAlign: 'left', fontSize: 13, fontWeight: 500, whiteSpace: 'normal' } }, [
           h('div', { key: 'name' }, row.name),
+          row.tier === undefined && !row.saturated ? null : h('div', { key: 'tier', style: { display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 2 } }, [row.tier === undefined ? null : TIER_PILL[row.tier]('t'), row.saturated ? SATURATED_PILL('s') : null]),
           row.metric === 'score' ? h('div', { key: 'unit', style: { fontSize: 11, color: C.faint, fontWeight: 400 } }, tx('平均分 ×100', 'mean score ×100')) : null,
         ]),
         ...columns.map((column) => {
@@ -455,13 +465,15 @@ function RunForm({ item, choices, runs, onStarted, onCancel, job }: {
   ])
 }
 
-function BenchmarkCard({ item, latest, onRun, active }: { readonly item: BenchCatalogItem; readonly latest: string | undefined; readonly onRun: () => void; readonly active: boolean }): ReactElement {
+/** One catalog card. */
+export function BenchmarkCard({ item, latest, saturated, onRun, active }: { readonly item: BenchCatalogItem; readonly latest: string | undefined; readonly saturated: boolean; readonly onRun: () => void; readonly active: boolean }): ReactElement {
   const startable = item.status === 'runnable' || item.status === 'bundled'
   return h('article', { style: { ...S.card, ...active ? { borderColor: C.brand } : {}, ...startable ? {} : { opacity: 0.82 } } }, [
     h('div', { key: 'head', style: { display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' } }, [
       h('h3', { key: 'n', style: { ...S.h2, fontSize: 14, overflowWrap: 'anywhere' } }, item.name),
       STATUS_PILL[item.status](),
     ]),
+    h('div', { key: 'tier', style: { display: 'flex', flexWrap: 'wrap', gap: 6 } }, [TIER_PILL[item.tier]('t'), saturated ? SATURATED_PILL('s') : null]),
     h('p', { key: 's', style: { ...S.muted, color: C.text } }, bi(item.summary)),
     item.caveat === undefined ? null : h('p', { key: 'c', style: { ...S.muted, fontSize: 12 } }, bi(item.caveat)),
     item.reason === undefined ? null : h('p', { key: 'r', style: { ...S.muted, fontSize: 12, color: C.warn } }, bi(item.reason)),
@@ -522,7 +534,7 @@ function CategoryTab({ category, choices, insights, list, ledgers, runs, onStart
       h('p', { key: 'p', style: S.muted }, `${bi(category.purpose)} ${fill(tx('共 {n} 个公认基准，其中 {r} 个能在这里运行。', '{n} recognized benchmarks; {r} run here.'), { n: items.length, r: runnable })}`),
       runnable === 0 ? h('p', { key: 'none', style: { ...S.muted, color: C.warn } }, tx('这一类目前没有能在本插件里运行的基准，下面列出它们和原因。Harness 对比页里的内置任务也是多步任务，可以先用它。', 'No benchmark in this category runs here yet; they are listed with the reason. The bundled tasks on the Harness comparison tab are multi-step and can stand in meanwhile.')) : null,
     ]),
-    h('div', { key: 'grid', style: S.grid }, ordered.map(item => h(BenchmarkCard, { key: item.id, item, latest: latest(item.id), active: selected === item.id, onRun: () => setSelected(selected === item.id ? undefined : item.id) }))),
+    h('div', { key: 'grid', style: S.grid }, ordered.map(item => h(BenchmarkCard, { key: item.id, item, latest: latest(item.id), saturated: insights?.rows.find(entry => entry.benchmark === item.id)?.saturated === true, active: selected === item.id, onRun: () => setSelected(selected === item.id ? undefined : item.id) }))),
     selectedItem === undefined ? null : h(RunForm, { key: `form-${selectedItem.id}`, item: selectedItem, choices, runs, job, onStarted: () => { setSelected(undefined); onStarted() }, onCancel: () => setSelected(undefined) }),
     experiments.length === 0 ? null : h('section', { key: 'history', style: S.card }, [
       h('h3', { key: 't', style: S.h2 }, tx('这一类的实验记录', 'Experiments in this category')),

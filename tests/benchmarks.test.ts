@@ -7,6 +7,8 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import {
@@ -18,7 +20,9 @@ import { CATALOG, CATEGORY_IDS, shuffledChoices, simpleQaTemplate } from '../src
 import type { BenchmarkAdapter } from '../src/catalog.js'
 import { DatasetStore, permutation } from '../src/datasets.js'
 import type { Fetch } from '../src/datasets.js'
-import { buildInsights } from '../src/insights.js'
+import { buildInsights, saturatedRow } from '../src/insights.js'
+import { BenchmarkCard } from '../src/page.js'
+import type { BenchCatalogItem } from '../src/runs.js'
 import { createJudge } from '../src/judge.js'
 import type { AnalysisOptions, Experiment, GraderSpec, RunRecord } from '../src/types.js'
 
@@ -154,6 +158,19 @@ describe('catalog', () => {
       if (entry.paper !== undefined) expect(entry.paper.url).toMatch(/^https:\/\//)
     }
     for (const category of CATEGORY_IDS) expect(CATALOG.some(entry => entry.category === category), category).toBe(true)
+  })
+
+  it('gives every row a tier, every RSI row the ceiling tier, and one benchmark one tier', () => {
+    for (const entry of CATALOG) expect(['floor', 'ceiling'], entry.id).toContain(entry.tier)
+    const rsi = CATALOG.filter(entry => entry.category === 'rsi')
+    expect(rsi.map(entry => entry.id)).toEqual(['rsi-exam'])
+    for (const entry of rsi) expect(entry.tier, entry.id).toBe('ceiling')
+    expect(CATALOG.find(entry => entry.id === 'rsi-exam')?.status).toEqual({ kind: 'blocked', blocker: 'harbor' })
+    const byName = new Map<string, Set<string>>()
+    for (const entry of CATALOG) byName.set(entry.name, (byName.get(entry.name) ?? new Set()).add(entry.tier))
+    for (const [name, tiers] of byName) expect(tiers.size, name).toBe(1)
+    expect(CATALOG.find(entry => entry.id === 'gsm8k')?.tier).toBe('floor')
+    expect(CATALOG.find(entry => entry.id === 'aime-2025')?.tier).toBe('ceiling')
   })
 
   it('pins every whole-file source to a full commit', () => {
@@ -375,6 +392,59 @@ describe('insights', () => {
     expect(insights.rows[0]).toMatchObject({ benchmark: 'mt-bench', metric: 'score' })
     expect(insights.rows[0]?.cells['plugin:@acme/mem:deepseek-official/deepseek-flash']).toMatchObject({ verdict: 'improved' })
     expect(insights.rows[0]?.cells['plugin:@acme/mem:deepseek-official/deepseek-flash']?.value).toBeCloseTo(0.7)
+  })
+
+  const ten = Array.from({ length: 10 }, (_, index) => `p0-${String(index)}`)
+  const baselineOnly = (id: string, passes: number, runs = 10, endedAt = 100): { experiment: Experiment; records: RunRecord[] } => ({
+    experiment: { ...experiment(id, '1.0.0'), tasks: ten.slice(0, runs), variants: [{ id: 'baseline', patches: [], env: {} }] },
+    records: ten.slice(0, runs).map((task, index) => record('baseline', task, index < passes, endedAt)),
+  })
+
+  it('marks a pass-rate benchmark saturated from its latest baseline with enough runs, and carries the tier', () => {
+    expect(buildInsights([baselineOnly('e1', 10)], OPTIONS).rows[0]).toMatchObject({ benchmark: 'gsm8k', tier: 'floor', saturated: true })
+    expect(buildInsights([baselineOnly('e1', 9)], OPTIONS).rows[0]?.saturated).toBe(true)
+    expect(buildInsights([baselineOnly('e1', 8)], OPTIONS).rows[0]?.saturated).toBe(false)
+    expect(buildInsights([baselineOnly('e1', 9, 9)], OPTIONS).rows[0]?.saturated).toBe(false)
+  })
+
+  it('ignores a saturated baseline from an earlier experiment than the row\'s latest', () => {
+    const older = baselineOnly('e1', 10, 10, 100)
+    const newer = baselineOnly('e2', 0, 10, 200)
+    newer.experiment = { ...newer.experiment, driver: { kind: 'model', provider: 'deepseek-official', model: 'deepseek-v4-pro' } }
+    const row = buildInsights([older, newer], OPTIONS).rows[0]
+    expect(row?.cells['baseline:deepseek-official/deepseek-flash']).toMatchObject({ value: 1, earlier: true })
+    expect(row?.saturated).toBe(false)
+  })
+
+  it('never marks a judged mean score saturated', () => {
+    const row = { benchmark: 'mt-bench', category: 'preference' as const, name: 'MT-Bench', metric: 'score' as const, saturated: false, latest: 'e', cells: { b: { value: 0.95, runs: 20, experiment: 'e', endedAt: 1 } } }
+    const columns = [{ id: 'b', kind: 'baseline' as const, driver: 'd' }]
+    expect(saturatedRow(row, columns)).toBe(false)
+    expect(saturatedRow({ ...row, metric: 'pass' }, columns)).toBe(true)
+    expect(saturatedRow({ ...row, metric: 'pass' }, [{ ...columns[0] as (typeof columns)[number], kind: 'plugin' as const }])).toBe(false)
+  })
+})
+
+describe('tier pills', () => {
+  const item = (tier: 'floor' | 'ceiling'): BenchCatalogItem => ({ id: 'x', category: 'math', tier, name: 'X', summary: { zh: '摘要', en: 'Summary' }, source: { label: 's', url: 'https://example.com' }, license: 'MIT', status: 'runnable', metric: 'pass', judged: false })
+  const render = (lang: string, tier: 'floor' | 'ceiling', saturated: boolean): string => {
+    const holder = globalThis as { document?: unknown }
+    holder.document = { documentElement: { lang } }
+    try {
+      return renderToStaticMarkup(createElement(BenchmarkCard, { item: item(tier), latest: undefined, saturated, active: false, onRun: () => {} }))
+    } finally {
+      delete holder.document
+    }
+  }
+
+  it('shows the tier on every card and the saturation badge only when saturated, in both languages', () => {
+    expect(render('zh-CN', 'floor', true)).toContain('保底')
+    expect(render('zh-CN', 'floor', true)).toContain('已饱和')
+    expect(render('zh-CN', 'ceiling', false)).toContain('摸高')
+    expect(render('zh-CN', 'ceiling', false)).not.toContain('已饱和')
+    expect(render('en', 'floor', true)).toContain('Floor')
+    expect(render('en', 'floor', true)).toContain('Saturated')
+    expect(render('en', 'ceiling', false)).toContain('Ceiling')
   })
 })
 

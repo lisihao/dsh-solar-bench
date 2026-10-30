@@ -16,7 +16,7 @@ import { mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { z } from 'zod'
 import { BLOCKERS, CATALOG, CATEGORIES, CATEGORY_IDS, catalogEntry } from './catalog.js'
-import type { Bilingual, CategoryId } from './catalog.js'
+import type { BenchTier, Bilingual, CategoryId } from './catalog.js'
 import { permutation } from './datasets.js'
 import type { DatasetStore } from './datasets.js'
 import type { JudgeReply } from './judge.js'
@@ -61,6 +61,7 @@ export const DEEPSEEK_KEY_ENV = 'DEEPSEEK_API_KEY'
 export interface BenchCatalogItem {
   id: string
   category: CategoryId
+  tier: BenchTier
   name: string
   summary: Bilingual
   source: { label: string; url: string }

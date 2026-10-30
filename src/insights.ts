@@ -8,7 +8,7 @@
 import { analyzeExperiment } from './analysis.js'
 import { catalogEntry } from './catalog.js'
 import { NO_GLOBAL_SKILLS } from './format.js'
-import type { CategoryId } from './catalog.js'
+import type { BenchTier, CategoryId } from './catalog.js'
 import type { AnalysisOptions, Experiment, ExperimentAnalysis, LedgerSnapshot, RunRecord, Verdict } from './types.js'
 
 /** One scoreboard column: the baseline under one driver, or one plugin. */
@@ -45,11 +45,38 @@ export interface ScoreCell {
 export interface ScoreRow {
   benchmark: string
   category: CategoryId | 'other'
+  /** The catalog entry's editorial tier; absent for a benchmark no longer in the catalog. */
+  tier?: BenchTier
   name: string
   metric: 'pass' | 'score'
   cells: Record<string, ScoreCell>
+  /** See `saturatedRow`. */
+  saturated: boolean
   /** The row's latest experiment; cells from it compare directly. */
   latest: string
+}
+
+/** Baseline success at or above this reads as saturated. */
+export const SATURATION_SUCCESS = 0.9
+/** Fewest valid baseline runs that can show saturation. */
+export const SATURATION_MIN_RUNS = 10
+
+/**
+ * Whether a scoreboard row shows its benchmark saturated: a baseline cell from
+ * the row's latest experiment (not an earlier one) with at least
+ * `SATURATION_MIN_RUNS` valid runs at `SATURATION_SUCCESS` or more. Only
+ * pass-rate rows qualify; a judge's mean score near 0.9 is not saturation.
+ * The result never changes the benchmark's declared tier.
+ * @param row - the scoreboard row.
+ * @param columns - the scoreboard columns.
+ * @returns whether the row is saturated.
+ */
+export function saturatedRow(row: ScoreRow, columns: readonly ScoreColumn[]): boolean {
+  if (row.metric !== 'pass') return false
+  return columns.some((column) => {
+    const cell = row.cells[column.id]
+    return column.kind === 'baseline' && cell !== undefined && cell.earlier !== true && cell.runs >= SATURATION_MIN_RUNS && cell.value >= SATURATION_SUCCESS
+  })
 }
 
 /** Evaluation settings of the experiments behind a scoreboard. */
@@ -152,7 +179,7 @@ export function buildInsights(ledgers: readonly LedgerSnapshot[], options: Analy
     const entry = catalogEntry(benchmark)
     const metric = analysis.metric
     const driver = driverKey(experiment)
-    const row = rows.get(benchmark) ?? { benchmark, category: entry?.category ?? 'other', name: entry?.name ?? benchmark, metric, cells: {}, latest: experiment.id }
+    const row = rows.get(benchmark) ?? { benchmark, category: entry?.category ?? 'other', ...entry === undefined ? {} : { tier: entry.tier }, name: entry?.name ?? benchmark, metric, cells: {}, saturated: false, latest: experiment.id }
     row.latest = experiment.id
     rows.set(benchmark, row)
     const endedAt = ended(records)
@@ -219,6 +246,7 @@ export function buildInsights(ledgers: readonly LedgerSnapshot[], options: Analy
   }
   for (const row of rows.values()) {
     for (const cell of Object.values(row.cells)) if (cell.experiment !== row.latest) cell.earlier = true
+    row.saturated = saturatedRow(row, [...columns.values()])
   }
   return { columns: [...columns.values()], rows: [...rows.values()], configs: [...configs.values()], health: [...health.values()], comparisons, unreadable }
 }

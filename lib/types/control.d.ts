@@ -6,8 +6,9 @@
  */
 import type { Context } from '@deepseek-ai/cordis';
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol';
+import type { BenchInsights } from './insights.js';
 import type { BenchDetailInput, BenchExperimentDetail, BenchExperimentList, BenchLedgersApi } from './contracts.js';
-import type { BenchCatalog, BenchRunManager, BenchRunChoices, BenchJobStatus, BenchStartInput } from './runs.js';
+import type { BenchRunManager, BenchRunChoices, BenchJobStatus, BenchStartInput } from './runs.js';
 import type { BenchRuntime } from './runtime.js';
 import type { AnalysisOptions } from './types.js';
 /** Remote service name; also the client's `remote.<name>` key. */
@@ -30,6 +31,7 @@ export declare class BenchLedgersControl extends TypertRemoteService {
     private owner;
     list(): Promise<BenchExperimentList>;
     detail(input: BenchDetailInput): Promise<BenchExperimentDetail>;
+    insights(): Promise<BenchInsights>;
 }
 declare module '@deepseek-ai/cordis' {
     interface Context {
@@ -48,7 +50,6 @@ export declare class BenchRunsControl extends TypertRemoteService {
     constructor(ctx: Context, runs: BenchRunManager);
     private owner;
     choices(): Promise<BenchRunChoices>;
-    catalog(): Promise<BenchCatalog>;
     start(input: BenchStartInput): Promise<{
         experimentId: string;
     }>;

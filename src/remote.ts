@@ -37,9 +37,17 @@ export const RPC_REMOTE: TypertRemoteContribution = {
       parameters: [{ name: 'input', wire: 'input', source: 'json' as const, codec: codec('BenchDetailInput') }],
       result: codec('BenchExperimentDetail'),
     },
+    {
+      id: `${PKG}#solarBenchLedgers/insights`,
+      service: 'solarBenchLedgers',
+      namespace: 'solarBenchLedgers',
+      method: 'insights',
+      invocation: { kind: 'direct' as const },
+      parameters: [],
+      result: codec('BenchInsights'),
+    },
     ...([
       ['choices', undefined, 'BenchRunChoices'],
-      ['catalog', undefined, 'BenchCatalog'],
       ['start', 'BenchStartInput', 'BenchStartResult'],
       ['status', undefined, 'BenchJobStatus'],
       ['stop', undefined, 'BenchJobStatus'],

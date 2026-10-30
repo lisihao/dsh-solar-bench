@@ -1,7 +1,7 @@
 {
   "name": "@lisihao/dsh-solar-bench",
   "version": "0.1.0-dev.0",
-  "description": "Ablation benchmarks for DSH plugins: pick tasks and plugins in the right sidebar, run isolated graded experiments, watch progress, and compare success, tokens, cost and time.",
+  "description": "Benchmarks for DSH: recognized public benchmarks in category tabs of a conversation View, driven by a chosen model or smart scheduling, with budgets, a persisted ledger and cross-experiment analysis of whether plugins work and help.",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
@@ -52,7 +52,7 @@
         "@deepseek-ai/dsh-api-remotes",
         "@deepseek-ai/dsh-client-connection",
         "@deepseek-ai/dsh-client-ui-slots",
-        "@deepseek-ai/dsh-client-ui-sidebar-right"
+        "@deepseek-ai/dsh-client-ui-conversation"
       ]
     }
   },
@@ -68,16 +68,16 @@
     "@deepseek-ai/dsh-client-connection": "0.2.1-rc.2",
     "@deepseek-ai/dsh-client-ui-slots": "0.2.1-rc.2",
     "react": "^18.3.1",
-    "@deepseek-ai/dsh-client-ui-sidebar-right": "0.2.1-rc.2",
-    "@deepseek-ai/dsh-credentials": "0.2.1-rc.2"
+    "@deepseek-ai/dsh-credentials": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-client-ui-conversation": "0.2.1-rc.2"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.5",
     "@deepseek-ai/dsh": "0.2.1-rc.2",
     "@deepseek-ai/dsh-api-remotes": "0.2.1-rc.2",
     "@deepseek-ai/dsh-client-connection": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-client-ui-conversation": "0.2.1-rc.2",
     "@deepseek-ai/dsh-client-ui-renderer": "0.2.1-rc.2",
-    "@deepseek-ai/dsh-client-ui-sidebar-right": "0.2.1-rc.2",
     "@deepseek-ai/dsh-client-ui-slots": "0.2.1-rc.2",
     "@deepseek-ai/dsh-credentials": "0.2.1-rc.2",
     "@deepseek-ai/dsh-home-paths": "0.2.1-rc.2",

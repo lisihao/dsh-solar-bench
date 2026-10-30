@@ -11,8 +11,9 @@
 import { Service } from '@deepseek-ai/cordis';
 import type { Context } from '@deepseek-ai/cordis';
 import z from '@deepseek-ai/schemastery';
+import type { JudgeReply } from './judge.js';
 import type { ModelPrice } from './metrics.js';
-import type { AnalysisOptions, CellKey, Experiment, ExperimentId, LedgerSnapshot, RunProgress, RunRecord } from './types.js';
+import type { AnalysisOptions, CellKey, Experiment, ExperimentId, JudgeRequest, LedgerSnapshot, RunProgress, RunRecord } from './types.js';
 declare module '@deepseek-ai/cordis' {
     interface Context {
         solarBenchRuntime: BenchRuntime;
@@ -25,7 +26,12 @@ declare module '@deepseek-ai/cordis' {
  * {@link RunOptions.env}, never as a copied file.
  */
 export declare const RUN_TEMPLATE_FILES: readonly string[];
-/** rc.2 canonical codes (`dsh-llm`) for a rejected credential or an exhausted quota or balance. */
+/**
+ * rc.2 codes for a rejected credential or an exhausted quota or balance. `AUTH`
+ * is what a real rc.2 one-shot run recorded on its root `turn/end` for a
+ * rejected DeepSeek key (HTTP 401, observed 2026-10-28); the others are
+ * `dsh-llm`'s canonical constants, not yet observed in a run.
+ */
 export declare const PROVIDER_FAILURE_CODES: readonly string[];
 /** Runtime configuration. */
 export interface Config {
@@ -74,6 +80,8 @@ export interface RunOptions {
     env?: Readonly<Record<string, string>>;
     /** Home whose `profiles/<profile>` seeds run homes, instead of the configured `templateHome`. */
     profileHome?: string;
+    /** The judge of judged benchmarks; graders that need one fail the run as invalid without it. */
+    judge?: (request: JudgeRequest, signal?: AbortSignal) => Promise<JudgeReply>;
 }
 /**
  * Package names that a patch file's insert rows mount (`name:` values).
@@ -112,6 +120,8 @@ export declare class BenchRuntime extends Service {
      *   or a grader spec is invalid, or when the ledger pins a different definition; the abort reason when cancelled.
      */
     run(experiment: Experiment, options?: RunOptions): Promise<RunRecord[]>;
+    /** Whether a launcher is configured, so {@link run} can start children. */
+    get canRun(): boolean;
     /** Absolute directory holding one ledger directory per experiment. */
     get ledgerRoot(): string;
     /**

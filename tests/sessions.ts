@@ -40,6 +40,27 @@ function toolResult(callId: string, isError: boolean): unknown {
   }
 }
 
+/**
+ * A root turn whose only reply is `text`, priced like {@link rootEvents}.
+ * @param text - the final assistant text.
+ * @returns the events.
+ */
+export function answerEvents(text: string): Draft[] {
+  return [
+    { type: 'turn/start', time: 1000, data: { turn: 1 } },
+    { type: 'step/start', time: 1000, data: { turn: 1, step: 1 } },
+    {
+      type: 'assistant/message', time: 1400, surfaceOp: 'append', data: {
+        turn: 1, step: 1,
+        message: { id: 'a1', role: 'assistant', content: [{ type: 'text', text }], source: { kind: 'model', provider: 'deepseek', model: 'deepseek-v4-flash' } },
+        usage: { inputTokens: 1000, outputTokens: 200, cacheReadTokens: 500 },
+      },
+    },
+    { type: 'step/end', time: 1400, data: { turn: 1, step: 1 } },
+    { type: 'turn/end', time: 1500, data: { turn: 1, reason: { kind: 'completed' } } },
+  ] as unknown as Draft[]
+}
+
 /** A subagent reply that costs tokens. */
 export function childEvents(): Draft[] {
   return [

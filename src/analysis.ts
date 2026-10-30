@@ -97,12 +97,19 @@ function estimate(diffs: readonly number[], options: AnalysisOptions): Estimate 
 interface TaskCell {
   valid: number
   passed: number
+  scores: number[]
   cost: number[]
   tokens: number[]
   wall: number[]
 }
 
 const success = (record: RunRecord): boolean => record.status === 'graded' && record.grade?.pass === true
+/** Cost of a run with its judge; `undefined` when either is unpriced. */
+const runCost = (record: RunRecord): number | undefined => {
+  const run = record.metrics?.costUsd
+  if (run === undefined || record.judge === undefined) return run
+  return record.judge.costUsd === undefined ? undefined : run + record.judge.costUsd
+}
 const totalTokens = (metrics: RunMetrics): number => metrics.tokens.input + metrics.tokens.cacheRead + metrics.tokens.output
 
 /**
@@ -123,6 +130,7 @@ function summarize(
   const costs: number[] = []
   const tokens: number[] = []
   const walls: number[] = []
+  const scores: number[] = []
   let graded = 0
   let timeouts = 0
   let invalid = 0
@@ -134,18 +142,22 @@ function summarize(
     }
     if (record.status === 'graded') graded += 1
     else timeouts += 1
-    const cell = cells.get(record.cell.task) ?? { valid: 0, passed: 0, cost: [], tokens: [], wall: [] }
+    const cell = cells.get(record.cell.task) ?? { valid: 0, passed: 0, scores: [], cost: [], tokens: [], wall: [] }
     cells.set(record.cell.task, cell)
     cell.valid += 1
+    const score = record.status === 'graded' ? record.grade?.score ?? 0 : 0
+    cell.scores.push(score)
+    scores.push(score)
     if (success(record)) {
       cell.passed += 1
       passed += 1
     }
     const metrics = record.metrics
     if (metrics === undefined) continue
-    if (metrics.costUsd !== undefined) {
-      costs.push(metrics.costUsd)
-      cell.cost.push(metrics.costUsd)
+    const cost = runCost(record)
+    if (cost !== undefined) {
+      costs.push(cost)
+      cell.cost.push(cost)
     }
     const total = totalTokens(metrics)
     tokens.push(total)
@@ -180,6 +192,7 @@ function summarize(
       const cell = cells.get(task) as TaskCell
       return cell.passed === cell.valid
     }).length),
+    meanScore: scores.length === 0 ? null : mean(scores),
     meanCostUsd: costs.length === 0 ? null : mean(costs),
     pricedRuns: costs.length,
     meanTokens: tokens.length === 0 ? null : mean(tokens),
@@ -258,6 +271,7 @@ function validate(options: AnalysisOptions): void {
  */
 export function analyzeExperiment(experiment: Experiment, records: readonly RunRecord[], options: AnalysisOptions): ExperimentAnalysis {
   validate(options)
+  const metric = experiment.benchmark?.metric ?? 'pass'
   const tasks = [...new Set(records.map(record => record.cell.task))]
   const folded = experiment.variants.map(variant =>
     summarize(variant.id, records.filter(record => record.cell.variant === variant.id), tasks))
@@ -267,26 +281,31 @@ export function analyzeExperiment(experiment: Experiment, records: readonly RunR
     const droppedTasks = tasks.filter(task => !pairedTasks.includes(task))
     const success = paired(pairedTasks, baseline.cells, cells, cell => [cell.passed / cell.valid], options)
       ?? { delta: 0, low: 0, high: 0, mde: null, tasks: 0 }
+    const score = paired(pairedTasks, baseline.cells, cells, cell => cell.scores, options)
+    const primary = metric === 'score' ? score ?? { delta: 0, low: 0, high: 0, mde: null, tasks: 0 } : success
     return {
       variant: summary.variant,
       success,
+      score,
       costUsd: paired(pairedTasks, baseline.cells, cells, cell => cell.cost, options),
       tokens: paired(pairedTasks, baseline.cells, cells, cell => cell.tokens, options),
       wallMs: paired(pairedTasks, baseline.cells, cells, cell => cell.wall, options),
       droppedTasks,
-      verdict: verdictOf(success, summary.invalidRate - baseline.summary.invalidRate, options),
+      verdict: verdictOf(primary, summary.invalidRate - baseline.summary.invalidRate, options),
     }
   })
   const priced = folded.map(entry => entry.summary).flatMap(summary =>
-    summary.meanCostUsd === null || summary.successRate === null
-      ? []
-      : [{ variant: summary.variant, success: summary.successRate, cost: summary.meanCostUsd }])
+    {
+      const quality = metric === 'score' ? summary.meanScore : summary.successRate
+      return summary.meanCostUsd === null || quality === null ? [] : [{ variant: summary.variant, success: quality, cost: summary.meanCostUsd }]
+    })
   // A point is dominated when another is at least as good on both axes and strictly better on one.
   const pareto = priced.filter(candidate => !priced.some(other =>
     other.success >= candidate.success && other.cost <= candidate.cost
     && (other.success > candidate.success || other.cost < candidate.cost)))
   return {
     baseline: baseline.summary.variant,
+    metric,
     variants: folded.map(entry => entry.summary),
     comparisons,
     matrix: tasks.map(task => ({

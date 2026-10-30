@@ -2,30 +2,31 @@ import { createElement, useSyncExternalStore, type ReactElement } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 import type { RemoteResult } from '@deepseek-ai/dsh-api-remotes/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
-import type { UseSidebarRightTabInfo } from '@deepseek-ai/dsh-client-ui-sidebar-right/client'
+import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { BenchDetailInput, BenchExperimentDetail, BenchExperimentList, BenchLedgersApi } from './contracts.js'
 import type { BenchT } from './format.js'
 import { currentLanguage, en, zh } from './locales.js'
 import { RPC_REMOTE } from './remote.js'
-import type { BenchCatalog, BenchJobStatus, BenchRunChoices, BenchStartInput } from './runs.js'
-import { BenchSidebar, type BenchRunsApi } from './view.js'
+import type { BenchJobStatus, BenchRunChoices, BenchStartInput } from './runs.js'
+import { BenchPage, type BenchRunsApi } from './page.js'
+import type { BenchInsights } from './insights.js'
 
 export const name = 'solar-bench'
-export const inject = ['slots', 'remote', 'connection', 'sidebarRightTabs']
+export const inject = ['slots', 'remote', 'connection']
 
-/** Identity of this tab type; also the key its body registers under. */
-const TAB_ID = '@lisihao/dsh-solar-bench/benchmarks'
-/** Kind the guide entry opens. */
-const TAB_KIND = 'solar-bench'
+/** Id of the conversation View entry; also its saved per-Session preference. */
+const VIEW_ID = 'solar-bench'
+/** Place after Chat and Trajectory (order 10). */
+const VIEW_ORDER = 90
 
 /** The wire-facing shapes returned by the rc.2 Client Remote carrier. */
 interface BenchLedgersWire {
   list(): Promise<RemoteResult<BenchExperimentList>>
   detail(input: BenchDetailInput): Promise<RemoteResult<BenchExperimentDetail>>
+  insights(): Promise<RemoteResult<BenchInsights>>
 }
 interface BenchRunsWire {
   choices(): Promise<RemoteResult<BenchRunChoices>>
-  catalog(): Promise<RemoteResult<BenchCatalog>>
   start(input: BenchStartInput): Promise<RemoteResult<{ experimentId: string }>>
   status(): Promise<RemoteResult<BenchJobStatus>>
   stop(): Promise<RemoteResult<BenchJobStatus>>
@@ -90,10 +91,10 @@ export function apply(ctx: Context): void {
         ledgers: {
           list: async () => unwrap(await ledgers.list()),
           detail: async input => unwrap(await ledgers.detail(input)),
+          insights: async () => unwrap(await ledgers.insights()),
         },
         runs: {
           choices: async () => unwrap(await runs.choices()),
-          catalog: async () => unwrap(await runs.catalog()),
           start: async input => unwrap(await runs.start(input)),
           status: async () => unwrap(await runs.status()),
           stop: async () => unwrap(await runs.stop()),
@@ -110,17 +111,10 @@ export function apply(ctx: Context): void {
     }
   }, 'solar-bench: remote')
 
-  ctx.effect(() => ctx.sidebarRightTabs.register({
-    id: TAB_ID,
-    kind: TAB_KIND,
-    title: () => t('nav'),
-    guide: [{ id: 'benchmarks', order: 90, title: () => t('nav'), description: () => t('guideDescription') }],
-  }), 'solar-bench: tab type')
-
-  const Body = ({ useTabInfo }: { readonly useTabInfo: UseSidebarRightTabInfo }): ReactElement => {
-    const { tab } = useTabInfo()
+  const Body = (): ReactElement => {
     const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot)
-    return createElement(BenchSidebar, { ledgers: snapshot.ledgers, runs: snapshot.runs, mountError: snapshot.error, visible: tab.visible, t })
+    return createElement(BenchPage, { ledgers: snapshot.ledgers, runs: snapshot.runs, mountError: snapshot.error, t })
   }
-  ctx.effect(() => ctx.slots.inject('sidebar.right.pane.tab', () => ctx.slots.register({ name: 'sidebar.right.pane.tab', key: TAB_ID }, Body)), 'solar-bench: tab body')
+  // The same registration path Trajectory uses: one entry of the session-scoped `conversation.view` list.
+  ctx.effect(() => ctx.slots.inject('conversation.view', () => ctx.slots.register({ name: 'conversation.view', id: VIEW_ID, order: VIEW_ORDER, label: () => t('nav') }, Body)), 'solar-bench: conversation view')
 }

@@ -2,29 +2,6 @@
 /** English dictionary. */
 export declare const en: {
     readonly nav: "Benchmarks";
-    readonly catalogTitle: "Benchmark catalog";
-    readonly catalogIntro: "Floor benchmarks check that nothing got worse and are expected to be near saturation; ceiling benchmarks are hard enough that real improvement shows.";
-    readonly tierFloor: "Floor";
-    readonly tierCeiling: "Ceiling";
-    readonly tierNone: "Unclassified";
-    readonly tagRsi: "RSI";
-    readonly saturatedBadge: "Saturated";
-    readonly saturated: "Saturated: baseline {rate} over {runs} runs ({experiment})";
-    readonly notSaturated: "Baseline {rate} over {runs} runs ({experiment})";
-    readonly noSaturation: "No recorded experiment yet.";
-    readonly runnableHere: "Runs from the form above.";
-    readonly statusPlanned: "Being integrated";
-    readonly missing: "This computer still needs: {items}";
-    readonly nothingMissing: "This computer has what it needs.";
-    readonly reqDocker: "Docker";
-    readonly reqHarbor: "Harbor";
-    readonly fieldSource: "Source";
-    readonly fieldLicense: "License";
-    readonly fieldHarness: "Harness";
-    readonly fieldHardware: "Hardware";
-    readonly fieldTime: "Time";
-    readonly fieldEvidence: "Difficulty evidence";
-    readonly fieldRevision: "Pinned revision";
     readonly runTitle: "New experiment";
     readonly suite: "Suite";
     readonly tasksLabel: "Tasks ({selected}/{total})";

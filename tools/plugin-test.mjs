@@ -154,10 +154,36 @@ async function readProbeMarker(path) {
   let marker
   try { marker = JSON.parse(await readFile(path, 'utf8')) } catch (error) { throw new Error(`bench probe marker is missing or invalid at ${path}: ${String(error)}`) }
   if (marker?.ok !== true) throw new Error(`bench probe reported failure: ${JSON.stringify(marker)}`)
-  for (const name of ['suite', 'ledgerRoot', 'list', 'detail', 'verdict', 'choices']) {
+  for (const name of ['suite', 'ledgerRoot', 'list', 'detail', 'verdict', 'choices', 'catalog', 'insights']) {
     if (marker.checks?.[name] !== true) throw new Error(`bench probe did not pass ${name}: ${JSON.stringify(marker)}`)
   }
   return marker
+}
+
+/**
+ * The generated driver and web-off patches, composed by the published dsh CLI onto a
+ * profile shaped like the run profile: the model row must change and tool-web must be disabled.
+ */
+async function assertRunPatches(scratch, environment) {
+  const { driverPatch, skillsOffPatch, WEB_OFF_PATCH } = await import(join(BENCH_PACKAGE, 'lib', 'index.js'))
+  const profile = join(environment.DSH_HOME, 'profiles', 'solar-bench-run')
+  await mkdir(profile, { recursive: true })
+  await writeFile(join(profile, 'package.json'), `${JSON.stringify({ name: 'dsh-profile-solar-bench-run', private: true, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-headless'] } } })}\n`)
+  const driver = join(scratch, 'driver.patch.yml')
+  const web = join(scratch, 'web-off.patch.yml')
+  await writeFile(driver, driverPatch({ provider: 'deepseek-official', model: 'deepseek-v4-pro', label: 'DeepSeek-V4-Pro' }))
+  await writeFile(web, WEB_OFF_PATCH)
+  const skills = join(scratch, 'skills-off.patch.yml')
+  const agentsHome = join(scratch, 'empty-agents-home')
+  await writeFile(skills, skillsOffPatch(agentsHome))
+  const label = 'dsh --profile solar-bench-run --patch driver --patch web-off --patch skills-off --dump-config'
+  const result = await runCommand(DSH_BIN, ['--profile', 'solar-bench-run', '--patch', driver, '--patch', web, '--patch', skills, '--dump-config'], { cwd: ROOT, env: environment, label })
+  if (result.status !== 0) throw commandError(label, result)
+  const rowOf = id => result.stdout.split(/\n(?=- id: )/).find(block => block.trimStart().startsWith(`- id: ${id}\n`)) ?? ''
+  if (!/model: deepseek-v4-pro/.test(rowOf('agent-default-model'))) throw new Error(`driver patch did not set the model:\n${rowOf('agent-default-model')}`)
+  if (!/disabled: true/.test(rowOf('tool-web'))) throw new Error(`web-off patch did not disable tool-web:\n${rowOf('tool-web')}`)
+  if (!rowOf('skill-filesystem').includes(`agentsHome: ${agentsHome}`)) throw new Error(`skills-off patch did not move the skill loader's agents home:\n${rowOf('skill-filesystem')}`)
+  return { model: 'deepseek-v4-pro', toolWeb: 'disabled', skillsAgentsHome: 'empty' }
 }
 
 async function main() {
@@ -187,6 +213,7 @@ async function main() {
         throw new Error(`${commandError(bootLabel, boot).message}\nprobe marker: ${markerHint}`)
       }
       marker = await readProbeMarker(environment.SOLAR_PLUGIN_PROBE_MARKER)
+      marker.runPatches = await assertRunPatches(scratch, environment)
     } catch (error) { primaryError = error }
   } finally {
     if (primaryError === undefined) await rm(scratch, { recursive: true, force: true })

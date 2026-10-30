@@ -16,7 +16,8 @@ import { cellEnv, prepareCell, scrubTemplateFiles } from '../src/cell.js'
 import type { AnalysisOptions, Experiment, RunRecord } from '../src/index.js'
 import { io, main } from '../src/cli-main.js'
 import { en, zh } from '../src/locales.js'
-import { BenchSidebar, Detail, ParetoChart } from '../src/view.js'
+import { Detail, ParetoChart } from '../src/view.js'
+import { BenchPage } from '../src/page.js'
 import { translator } from '../src/client.js'
 
 const ANALYSIS: AnalysisOptions = { confidence: 0.95, resamples: 200, seed: 1, margin: 0.05, minTasks: 3, invalidTolerance: 0.1 }
@@ -95,7 +96,7 @@ describe('run record schema', () => {
     await expect(read(ungraded)).rejects.toThrow(/runs\.jsonl:2: .*graded record carries grade and grader/s)
     await expect(read({ ...graded('plugin', 't1', true, 0.01), status: 'skipped' })).rejects.toThrow(/runs\.jsonl:2:/)
     await expect(read({ ...graded('plugin', 't1', true, 0.01), extra: 1 })).rejects.toThrow(/runs\.jsonl:2:/)
-    await expect(read({ ...graded('plugin', 't1', true, 0.01), formatVersion: 2 })).rejects.toThrow(/run record format 2 is not readable/)
+    await expect(read({ ...graded('plugin', 't1', true, 0.01), formatVersion: 4 })).rejects.toThrow(/run record format 4 is not readable/)
   })
 })
 
@@ -216,11 +217,35 @@ describe('results view', () => {
   })
 })
 
-describe('right sidebar tab', () => {
-  it('fills the clipped tab body and scrolls inside its own area', () => {
-    const html = renderToStaticMarkup(createElement(BenchSidebar, { ledgers: undefined, runs: undefined, mountError: undefined, visible: true, t: key => zh[key] }))
-    expect(html).toMatch(/^<main style="height:100%;min-height:0;flex:auto;display:flex;flex-direction:column/)
-    expect(html).toMatch(/data-scroll="solar-bench" style="[^"]*flex:auto;min-height:0;overflow-y:auto/)
+describe('conversation view', () => {
+  it('registers one conversation View entry and no right-sidebar tab', async () => {
+    const registered: { options: Record<string, unknown> }[] = []
+    const effects: (() => unknown)[] = []
+    const fake = {
+      effect: (fn: () => unknown) => { effects.push(fn) },
+      remote: { $mount: () => new Promise(() => {}) },
+      get: () => undefined,
+      slots: {
+        inject: (name: string, fn: () => unknown) => { expect(name).toBe('conversation.view'); return fn() },
+        register: (options: Record<string, unknown>) => { registered.push({ options }); return () => {} },
+      },
+    }
+    const client = await import('../src/client.js')
+    expect(client.inject).toEqual(['slots', 'remote', 'connection'])
+    client.apply(fake as never)
+    for (const effect of effects) effect()
+    expect(registered.map(entry => ({ ...entry.options, label: (entry.options.label as () => string)() }))).toEqual([{ name: 'conversation.view', id: 'solar-bench', order: 90, label: en.nav }])
+    const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as { dsh: { client: { inject: string[] } }; peerDependencies: Record<string, string> }
+    expect(manifest.dsh.client.inject).toContain('@deepseek-ai/dsh-client-ui-conversation')
+    expect(manifest.dsh.client.inject.some(name => name.includes('sidebar-right'))).toBe(false)
+    expect(Object.keys(manifest.peerDependencies).some(name => name.includes('sidebar-right'))).toBe(false)
+  })
+
+  it('renders the mount error and the connecting state without internal ids', () => {
+    expect(renderToStaticMarkup(createElement(BenchPage, { ledgers: undefined, runs: undefined, mountError: 'service missing', t: key => en[key] }))).toContain('service missing')
+    const html = renderToStaticMarkup(createElement(BenchPage, { ledgers: undefined, runs: undefined, mountError: undefined, t: key => en[key] }))
+    expect(html).toContain('Connecting to the benchmark service')
+    expect(html).not.toMatch(/solar-bench|BENCH_/)
   })
 })
 

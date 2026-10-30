@@ -9,9 +9,11 @@ import type { Context } from '@deepseek-ai/cordis'
 import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import { z } from 'zod'
 import { analyzeExperiment } from './analysis.js'
+import { buildInsights } from './insights.js'
+import type { BenchInsights } from './insights.js'
 import type { BenchDetailInput, BenchExperimentDetail, BenchExperimentList, BenchExperimentListItem, BenchLedgersApi } from './contracts.js'
 import { variantTitles } from './runs.js'
-import type { BenchCatalog, BenchRunManager, BenchRunChoices, BenchJobStatus, BenchStartInput } from './runs.js'
+import type { BenchRunManager, BenchRunChoices, BenchJobStatus, BenchStartInput } from './runs.js'
 import type { BenchRuntime } from './runtime.js'
 import type { AnalysisOptions } from './types.js'
 
@@ -47,6 +49,7 @@ export function createLedgersApi(runtime: BenchRuntime, analysis: AnalysisOption
           suite: snapshot.experiment.suite,
           variants: snapshot.experiment.variants.map(variant => variant.id),
           repetitions: snapshot.experiment.repetitions,
+          ...snapshot.experiment.benchmark === undefined ? {} : { benchmark: snapshot.experiment.benchmark.id },
           runs: snapshot.records.length,
           lastEndedAt: ends.length === 0 ? null : Math.max(...ends),
         })
@@ -58,6 +61,19 @@ export function createLedgersApi(runtime: BenchRuntime, analysis: AnalysisOption
       const snapshot = await runtime.ledger(id)
       if (snapshot === undefined) throw new Error(`BENCH_EXPERIMENT_NOT_FOUND: no experiment ${JSON.stringify(id)}`)
       return { ...snapshot, analysis: analyzeExperiment(snapshot.experiment, snapshot.records, analysis), titles: await variantTitles(snapshot.experiment) }
+    },
+    async insights(): Promise<BenchInsights> {
+      const snapshots = []
+      const unreadable: { id: string; message: string }[] = []
+      for (const id of await runtime.experiments()) {
+        try {
+          const snapshot = await runtime.ledger(id)
+          if (snapshot !== undefined) snapshots.push(snapshot)
+        } catch (error) {
+          unreadable.push({ id, message: (error as Error).message })
+        }
+      }
+      return buildInsights(snapshots, analysis, unreadable)
     },
   }
 }
@@ -89,6 +105,12 @@ export class BenchLedgersControl extends TypertRemoteService {
     this.owner()
     return this.api.detail(input)
   }
+
+  @Remote
+  async insights(): Promise<BenchInsights> {
+    this.owner()
+    return this.api.insights()
+  }
 }
 
 declare module '@deepseek-ai/cordis' { interface Context { solarBenchLedgers: BenchLedgersControl } }
@@ -116,12 +138,6 @@ export class BenchRunsControl extends TypertRemoteService {
   async choices(): Promise<BenchRunChoices> {
     this.owner()
     return this.runs.choices()
-  }
-
-  @Remote
-  async catalog(): Promise<BenchCatalog> {
-    this.owner()
-    return this.runs.catalog()
   }
 
   @Remote

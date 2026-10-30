@@ -6,8 +6,20 @@
  * @module @lisihao/dsh-solar-bench/ledger
  */
 import type { CellKey, Experiment, ExperimentId, RunRecord } from './types.js';
-/** The ledger format version this build reads and writes, in `experiment.json` and every run record. */
+/** Format version of `experiment.json` and run records of a bundled-suite experiment, as DSH 3.x and the first build wrote them. */
 export declare const LEDGER_FORMAT_VERSION = 1;
+/** Format version of an experiment that samples a public benchmark, sets a driver or carries a budget, and of its run records. */
+export declare const LEDGER_FORMAT_VERSION_2 = 2;
+/** Format version of an experiment that records whether runs saw the user's global skills, and of its run records. */
+export declare const LEDGER_FORMAT_VERSION_3 = 3;
+/**
+ * The format version an experiment is written with: the oldest that holds its
+ * fields, so a resumed ledger still matches its pinned file and an older build
+ * refuses only what it cannot read.
+ * @param experiment - the definition.
+ * @returns 1, 2 or 3.
+ */
+export declare function experimentFormatVersion(experiment: Experiment): 1 | 2 | 3;
 /**
  * Stable string key of a cell.
  * @param cell - run coordinates.

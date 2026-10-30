@@ -18,6 +18,7 @@ import { z } from 'zod'
 import { Context } from '@deepseek-ai/cordis'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import { analyzeExperiment } from './analysis.js'
+import { APP_DSH_LAUNCHER, appBundle } from './app.js'
 import { loadDeclarativeSuite } from './declarative.js'
 import { readExperiment } from './experiment.js'
 import { importLegacyLedger } from './import.js'
@@ -30,8 +31,6 @@ import type { AnalysisOptions, Comparison, Experiment, ExperimentAnalysis, RunPr
 /** Exit code when the plan was printed but nothing ran. */
 export const EXIT_UNCONFIRMED = 2
 
-/** Launcher of the official app's bundled CLI. */
-const APP_DSH_LAUNCHER = '/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh'
 
 /** Analysis settings of the printed summary; the Settings page uses the same defaults. */
 const ANALYSIS: AnalysisOptions = { confidence: 0.95, resamples: 2000, seed: 1, margin: 0.05, minTasks: 10, invalidTolerance: 0.1 }
@@ -267,7 +266,7 @@ export async function main(argv: readonly string[], signal: AbortSignal = new Ab
       const flags: RunFlags = {
         experiment: target,
         confirmed: values.yes === true,
-        launcher: values.launcher ?? [APP_DSH_LAUNCHER],
+        launcher: values.launcher ?? [join(appBundle() ?? '/Applications/DeepSeek Harness.app', APP_DSH_LAUNCHER)],
         concurrency,
         home,
         prices: values.prices === undefined ? [] : await readPrices(values.prices),

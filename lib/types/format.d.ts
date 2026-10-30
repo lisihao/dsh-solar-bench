@@ -51,3 +51,5 @@ export interface ComparisonText {
  * @returns headline, detail, and extra lines.
  */
 export declare function describeComparison(comparison: Comparison, analysis: ExperimentAnalysis, t: BenchT): ComparisonText;
+/** Suffix of a driver key whose runs left out the user's global skills, so those runs never share a scoreboard column with runs that had them. */
+export declare const NO_GLOBAL_SKILLS = "#no-global-skills";

@@ -108,3 +108,6 @@ export function describeComparison(comparison: Comparison, analysis: ExperimentA
   if (comparison.wallMs !== null) extras.push(fill(t('timeDelta'), { value: signed(comparison.wallMs.delta, magnitude => seconds(magnitude)) }))
   return { headline: t(HEADLINE[comparison.verdict]), detail, extras }
 }
+
+/** Suffix of a driver key whose runs left out the user's global skills, so those runs never share a scoreboard column with runs that had them. */
+export const NO_GLOBAL_SKILLS = '#no-global-skills'

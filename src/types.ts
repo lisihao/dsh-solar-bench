@@ -16,9 +16,6 @@ export type BenchTaskId = string
 /** Experiment key; also the experiment's directory name under the ledger root. */
 export type ExperimentId = string
 
-/** Difficulty tier of a suite or catalog entry. */
-export type BenchTier = 'floor' | 'ceiling'
-
 /** Variant key, unique within one experiment. */
 export type VariantId = string
 
@@ -48,6 +45,8 @@ export interface BenchTask {
   grader: GraderSpec
   /** Free-form labels for filtering and per-group reporting. */
   tags: readonly string[]
+  /** Workspace-relative files written into the run workspace after the fixture, such as a long context. */
+  files?: Readonly<Record<string, string>>
 }
 
 /** A named, versioned set of tasks contributed by a plugin. */
@@ -63,19 +62,11 @@ export interface BenchSuite {
   /** One-sentence description shown when choosing a suite. */
   description: string
   /**
-   * Editorial difficulty tier: `floor` (保底) suites check that nothing
-   * regressed and are expected to be near saturation; `ceiling` (摸高) suites
-   * are hard enough that improvements remain visible. Absent means unclassified.
-   */
-  tier?: BenchTier
-  /** Free-form suite labels, such as `rsi` for recursive self-improvement. */
-  tags?: readonly string[]
-  /**
    * Materialize the task list. Task ids must be unique.
    * @param signal - aborts a slow load.
    * @returns the suite's tasks in a stable order.
    */
-  load(signal?: AbortSignal): Promise<readonly BenchTask[]>
+  load(signal?: AbortSignal, experiment?: Experiment): Promise<readonly BenchTask[]>
 }
 
 /** Everything a grader may inspect about one finished run. */
@@ -86,6 +77,16 @@ export interface GradeInput {
   events: readonly SessionEvent[]
   /** Aborts grading, for example when the experiment is cancelled. */
   signal?: AbortSignal
+  /** Asks the experiment's judge model; present when the runtime has a judge configured. */
+  judge?: (request: JudgeRequest) => Promise<string>
+}
+
+/** One judge-model request a grader makes. */
+export interface JudgeRequest {
+  /** System message. */
+  system: string
+  /** User message. */
+  user: string
 }
 
 /** A grader's verdict on one run. */
@@ -135,6 +136,27 @@ export interface Variant {
   env: Readonly<Record<string, string>>
 }
 
+/** How every variant's runs pick their model. */
+export type ExperimentDriver =
+  /** One provider model, set through the `agent-default-model` row; `plugin` pins the package that registers a plugin provider. */
+  | { kind: 'model'; provider: string; model: string; plugin?: string }
+  /** Installed scheduling plugins loaded into every variant on top of the default model. */
+  | { kind: 'scheduler'; plugins: readonly string[]; provider: string; model: string }
+
+/** The public benchmark an experiment samples, pinned at its start. */
+export interface ExperimentBenchmark {
+  /** Catalog id. */
+  id: string
+  /** Where the rows came from, as shown to the user. */
+  source: string
+  /** Source revision the rows were read at. */
+  revision: string
+  /** Seed of the sample. */
+  seed: number
+  /** Primary measure: pass rate, or mean graded score. */
+  metric: 'pass' | 'score'
+}
+
 /** A resolved experiment: suite × variants × repetitions. */
 export interface Experiment {
   /** Experiment key. */
@@ -149,6 +171,24 @@ export interface Experiment {
   tasks?: readonly BenchTaskId[]
   /** Compositions under test; the first is the baseline. */
   variants: readonly Variant[]
+  /** The sampled public benchmark; absent for a bundled suite. */
+  benchmark?: ExperimentBenchmark
+  /** The driver; absent means the run profile's default model. */
+  driver?: ExperimentDriver
+  /** Absolute `--patch` overlays applied to every variant before its own, such as the driver and web-tool switch. */
+  shared?: readonly string[]
+  /** Spending limit in US dollars the experiment was started with. */
+  budgetUsd?: number
+  /** Whether the agent could use web search and fetch. */
+  webTools?: boolean
+  /** Judge model of judged benchmarks. */
+  judge?: { provider: string; model: string }
+  /** Model ids the user declared not billed per token; their runs are priced at zero. */
+  unbilledModels?: readonly string[]
+  /** The user accepted that every item spends subscription quota the budget cannot see. */
+  subscriptionAccepted?: true
+  /** Whether runs saw the user's global skills (`~/.agents/skills`); absent in experiments before format 3, which did. */
+  globalSkills?: boolean
 }
 
 /** Coordinates of one run inside an experiment. */
@@ -227,10 +267,20 @@ export type RunStatus =
   /** The run could not be measured (no session log, grader error); excluded from success rates. */
   | 'invalid'
 
+/** Judge-model usage of one run. */
+export interface JudgeUsage {
+  /** Requests made. */
+  calls: number
+  /** Input + output tokens. */
+  tokens: number
+  /** Cost; absent when the judge model has no price row. */
+  costUsd?: number
+}
+
 /** One ledger line: everything needed to analyze and reproduce one run. */
 export interface RunRecord {
-  /** Ledger format version; readers refuse records with another value. */
-  formatVersion: 1
+  /** Record format version: 1, or 2 when it may carry `judge` and `answer`. */
+  formatVersion: 1 | 2 | 3
   /** Run coordinates. */
   cell: CellKey
   /** Terminal state. */
@@ -253,6 +303,10 @@ export interface RunRecord {
   startedAt: number
   /** Epoch milliseconds when the run ended. */
   endedAt: number
+  /** Judge usage of a judged run. */
+  judge?: JudgeUsage
+  /** The parsed final answer, truncated, for inspection. */
+  answer?: string
 }
 
 /** Progress notification for one finished run. */
@@ -341,7 +395,9 @@ export interface VariantSummary {
   passAnyRate: number | null
   /** Tasks whose every valid run passed, over tasks with a valid run. */
   passAllRate: number | null
-  /** Mean cost over runs carrying `costUsd`. */
+  /** Mean grade score over graded and timed-out runs (a timeout scores 0); `null` when there are none. */
+  meanScore: number | null
+  /** Mean cost over runs carrying `costUsd`, judge cost included. */
   meanCostUsd: number | null
   /** Runs carrying `costUsd`. */
   pricedRuns: number
@@ -363,6 +419,8 @@ export interface Comparison {
   variant: VariantId
   /** Success-rate difference. */
   success: Estimate
+  /** Mean-score difference; `null` when no task is paired. */
+  score: Estimate | null
   /** Cost difference in USD, over tasks priced on both sides; `null` when none are. */
   costUsd: Estimate | null
   /** Token difference. */
@@ -371,7 +429,7 @@ export interface Comparison {
   wallMs: Estimate | null
   /** Tasks without a valid run on both sides, left out of `success`. */
   droppedTasks: readonly BenchTaskId[]
-  /** The success verdict. */
+  /** The verdict on the experiment's primary measure. */
   verdict: Verdict
 }
 
@@ -379,6 +437,8 @@ export interface Comparison {
 export interface ExperimentAnalysis {
   /** The baseline variant (the experiment's first). */
   baseline: VariantId
+  /** The measure verdicts are judged on. */
+  metric: 'pass' | 'score'
   /** Every variant, in experiment order. */
   variants: readonly VariantSummary[]
   /** Every non-baseline variant against the baseline. */

@@ -10,18 +10,20 @@
  */
 
 import { spawn } from 'node:child_process'
-import { readFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { dirname, join, normalize, sep } from 'node:path'
 import { Service } from '@deepseek-ai/cordis'
 import type { Context } from '@deepseek-ai/cordis'
 import type { BenchSuite, BenchTask, BenchTaskId } from './types.js'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import z from '@deepseek-ai/schemastery'
-import { cellEnv, prepareCell, readRunSessions, scrubTemplateFiles } from './cell.js'
-import { cellKey, ExperimentLedger, LEDGER_FORMAT_VERSION, listExperimentIds, readPinnedExperiment } from './ledger.js'
+import { cellEnv, prepareCell, readRunSessions, reapCellProcesses, scrubTemplateFiles } from './cell.js'
+import { finalText, parseAnswer } from './answer-graders.js'
+import type { JudgeReply } from './judge.js'
+import { cellKey, experimentFormatVersion, ExperimentLedger, listExperimentIds, readPinnedExperiment } from './ledger.js'
 import { foldRunMetrics } from './metrics.js'
 import type { ModelPrice } from './metrics.js'
-import type { AnalysisOptions, CellKey, Experiment, ExperimentId, LedgerSnapshot, RunProgress, RunRecord, Variant } from './types.js'
+import type { AnalysisOptions, CellKey, Experiment, ExperimentId, JudgeRequest, JudgeUsage, LedgerSnapshot, RunProgress, RunRecord, Variant } from './types.js'
 
 
 declare module '@deepseek-ai/cordis' {
@@ -38,8 +40,13 @@ declare module '@deepseek-ai/cordis' {
  */
 export const RUN_TEMPLATE_FILES: readonly string[] = ['.env']
 
-/** rc.2 canonical codes (`dsh-llm`) for a rejected credential or an exhausted quota or balance. */
-export const PROVIDER_FAILURE_CODES: readonly string[] = ['INVALID_CREDENTIAL', 'QUOTA', 'ACCOUNT_QUOTA']
+/**
+ * rc.2 codes for a rejected credential or an exhausted quota or balance. `AUTH`
+ * is what a real rc.2 one-shot run recorded on its root `turn/end` for a
+ * rejected DeepSeek key (HTTP 401, observed 2026-10-28); the others are
+ * `dsh-llm`'s canonical constants, not yet observed in a run.
+ */
+export const PROVIDER_FAILURE_CODES: readonly string[] = ['AUTH', 'INVALID_CREDENTIAL', 'QUOTA', 'ACCOUNT_QUOTA']
 
 /** Runtime configuration. */
 export interface Config {
@@ -112,6 +119,8 @@ export interface RunOptions {
   env?: Readonly<Record<string, string>>
   /** Home whose `profiles/<profile>` seeds run homes, instead of the configured `templateHome`. */
   profileHome?: string
+  /** The judge of judged benchmarks; graders that need one fail the run as invalid without it. */
+  judge?: (request: JudgeRequest, signal?: AbortSignal) => Promise<JudgeReply>
 }
 
 /** Child output head kept for activation warnings, which print before the answer. */
@@ -201,7 +210,7 @@ export class BenchRuntime extends Service {
     if (command.length === 0) throw new Error('bench-runner: no command is configured, so this runtime only reads ledgers')
     const suite = this.ctx.solarBenchmarks.suite(experiment.suite)
     if (suite === undefined) throw new Error(`benchmark suite ${JSON.stringify(experiment.suite)} is not registered`)
-    const tasks = this.selectTasks(experiment, await suite.load(options.signal))
+    const tasks = this.selectTasks(experiment, await suite.load(options.signal, experiment))
     const ledger = new ExperimentLedger(this.config.ledgerRoot, experiment)
     await ledger.open()
     const records = await ledger.records(true)
@@ -230,6 +239,11 @@ export class BenchRuntime extends Service {
     const settled = await Promise.allSettled(workers)
     for (const result of settled) if (result.status === 'rejected') throw result.reason
     return records
+  }
+
+  /** Whether a launcher is configured, so {@link run} can start children. */
+  get canRun(): boolean {
+    return this.config.command.length > 0
   }
 
   /** Absolute directory holding one ledger directory per experiment. */
@@ -303,20 +317,43 @@ export class BenchRuntime extends Service {
     const dir = join(ledgerDir, 'cells', job.cell.variant, job.cell.task, String(job.cell.rep))
     const template = { home: options.profileHome ?? this.config.templateHome, filesHome: this.config.templateHome, files: this.config.templateFiles }
     const dirs = await prepareCell(dir, job.task.fixture, template, experiment.profile)
-    const packages = (await Promise.all(job.variant.patches.map(async patch => patchPackageNames(await readFile(patch, 'utf8').catch(() => ''))))).flat()
+    for (const [file, content] of Object.entries(job.task.files ?? {})) {
+      const relative = normalize(file)
+      if (relative.startsWith(`..${sep}`) || relative === '..' || relative.startsWith(sep)) throw new Error(`task ${JSON.stringify(job.task.id)} writes outside its workspace: ${file}`)
+      await mkdir(dirname(join(dirs.workspace, relative)), { recursive: true })
+      await writeFile(join(dirs.workspace, relative), content)
+    }
+    const patches = [...experiment.shared ?? [], ...job.variant.patches]
+    const namesOf = async (list: readonly string[]): Promise<string[]> => (await Promise.all(list.map(async patch => patchPackageNames(await readFile(patch, 'utf8').catch(() => ''))))).flat()
+    const sharedPackages = await namesOf(experiment.shared ?? [])
+    const packages = await namesOf(job.variant.patches)
     const argv = [
       ...command.slice(1),
       '--profile', experiment.profile,
-      ...job.variant.patches.flatMap(patch => ['--patch', patch]),
+      ...patches.flatMap(patch => ['--patch', patch]),
       job.task.prompt,
     ]
     options.onStart?.(job.cell)
     const env = { ...cellEnv(process.env, dirs, job.variant), ...options.env }
     const onOutput = options.onOutput === undefined ? undefined : (text: string) => { options.onOutput?.(job.cell, redact(text)) }
-    const raw = await this.spawnChild(command[0] as string, argv, dirs.workspace, env, signal, onOutput)
+    let raw
+    try {
+      raw = await this.spawnChild(command[0] as string, argv, dirs.workspace, env, signal, onOutput)
+    } finally {
+      // A plugin of the run (a scheduling driver's daemon, for one) may outlive the child; the run directory names it.
+      const reaped = await reapCellProcesses(dir).catch(() => [])
+      if (reaped.length > 0) options.onOutput?.(job.cell, `stopped ${String(reaped.length)} leftover process(es) of this run: ${reaped.join(', ')}\n`)
+    }
     const exit = { ...raw, output: redact(raw.output), head: redact(raw.head) }
     await scrubTemplateFiles(dirs.home, this.config.templateFiles)
-    const base = { formatVersion: LEDGER_FORMAT_VERSION as 1, cell: job.cell, exitCode: exit.code, suiteVersion: suite.version, startedAt }
+    const formatVersion = experimentFormatVersion(experiment)
+    const base = { formatVersion, cell: job.cell, exitCode: exit.code, suiteVersion: suite.version, startedAt }
+    // A row of the experiment's shared patches (a scheduling driver) failing is not the variant's fault.
+    const sharedInactive = inactivePatchRow(sharedPackages, exit.head)
+    if (sharedInactive !== undefined) {
+      signal?.throwIfAborted()
+      return { ...base, status: 'invalid', models: [], error: `scheduling plugin did not load: ${sharedInactive}`, endedAt: Date.now() }
+    }
     const inactive = inactivePatchRow(packages, exit.head)
     if (inactive !== undefined) {
       signal?.throwIfAborted()
@@ -329,7 +366,9 @@ export class BenchRuntime extends Service {
       if (exit.timedOut) return { ...base, status: 'timeout', models: [], endedAt: Date.now() }
       return { ...base, status: 'invalid', models: [], error: `session log unreadable: ${(error as Error).message}\n${exit.output}`, endedAt: Date.now() }
     }
-    const { metrics, models } = foldRunMetrics(sessions.root, sessions.children, this.config.prices)
+    // Models the user declared not billed per token (a self-hosted server, a subscription) are priced at zero for this experiment only.
+    const prices = [...(experiment.unbilledModels ?? []).map(model => ({ model, input: 0, output: 0, cacheRead: 0 })), ...this.config.prices]
+    const { metrics, models } = foldRunMetrics(sessions.root, sessions.children, prices)
     const unavailable = providerFailure(sessions.root, this.config.providerFailureCodes)
     if (unavailable !== undefined) return { ...base, status: 'invalid', metrics, models, error: `model unavailable: ${unavailable}`, endedAt: Date.now() }
     if (exit.timedOut) return { ...base, status: 'timeout', metrics, models, endedAt: Date.now() }
@@ -337,13 +376,31 @@ export class BenchRuntime extends Service {
     if (grader === undefined) {
       return { ...base, status: 'invalid', metrics, models, error: `grader ${JSON.stringify(job.task.grader.kind)} was unregistered during the experiment`, endedAt: Date.now() }
     }
+    const usage: JudgeUsage = { calls: 0, tokens: 0 }
+    let unpricedJudge = false
+    const judge = options.judge === undefined ? undefined : async (request: JudgeRequest): Promise<string> => {
+      const reply = await (options.judge as NonNullable<RunOptions['judge']>)(request, signal)
+      usage.calls += 1
+      usage.tokens += reply.tokens
+      if (reply.costUsd === undefined) unpricedJudge = true
+      else usage.costUsd = (usage.costUsd ?? 0) + reply.costUsd
+      return reply.text
+    }
+    const extra = (): Partial<RunRecord> => {
+      if (formatVersion === 1) return {}
+      const answer = parseAnswer(finalText(sessions.root))
+      return {
+        ...usage.calls === 0 ? {} : { judge: unpricedJudge ? { calls: usage.calls, tokens: usage.tokens } : usage },
+        ...answer === undefined ? {} : { answer: redact(answer).slice(0, 200) },
+      }
+    }
     try {
-      const input = { workspace: dirs.workspace, events: sessions.root, ...signal === undefined ? {} : { signal } }
+      const input = { workspace: dirs.workspace, events: sessions.root, ...signal === undefined ? {} : { signal }, ...judge === undefined ? {} : { judge } }
       const grade = await grader.grade(job.task.grader, input)
-      return { ...base, status: 'graded', grade, grader: { kind: grader.kind, version: grader.version }, metrics, models, endedAt: Date.now() }
+      return { ...base, status: 'graded', grade, grader: { kind: grader.kind, version: grader.version }, metrics, models, ...extra(), endedAt: Date.now() }
     } catch (error) {
       signal?.throwIfAborted()
-      return { ...base, status: 'invalid', metrics, models, error: `grader failed: ${(error as Error).message}`, endedAt: Date.now() }
+      return { ...base, status: 'invalid', metrics, models, ...extra(), error: `grader failed: ${redact((error as Error).message)}`, endedAt: Date.now() }
     }
   }
 

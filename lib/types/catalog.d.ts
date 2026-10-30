@@ -1,78 +1,145 @@
 /**
- * The benchmark catalog: every benchmark the plugin knows, classified as
- * floor (保底: near saturation, checks that nothing regressed) or ceiling
- * (摸高: hard enough that improvements stay visible), with what running it
- * needs on this machine. Suites registered with `solarBenchmarks` run from
- * the form; external benchmarks are listed with their requirements and how
- * far their integration has come. Only benchmarks that run on this Mac
- * without GPUs or model training are listed. Facts below were read from each project's
- * own repository, dataset card or paper on 2026-10-29.
+ * The benchmark catalog: recognized public benchmarks grouped into categories,
+ * each either runnable here (with an adapter that turns a fetched row into a
+ * task and a grader spec) or listed with the concrete reason it cannot run.
+ * Licenses and gating were read from the Hugging Face and GitHub APIs on
+ * 2026-10-28; see docs/benchmarks-design.md.
  * @module @lisihao/dsh-solar-bench/catalog
  */
-import type { BenchTier } from './types.js';
-/** Text in both page languages. */
-export interface BenchText {
+import type { DataSource, DatasetRow, DatasetStore } from './datasets.js';
+import type { BenchSuite, BenchTask } from './types.js';
+/** Category tabs, in display order. */
+export declare const CATEGORY_IDS: readonly ["agent", "coding", "general", "math", "long-context", "preference", "long-horizon", "science", "harness"];
+/** One category tab. */
+export type CategoryId = typeof CATEGORY_IDS[number];
+/** Text in both UI languages. */
+export interface Bilingual {
     zh: string;
     en: string;
 }
-/** Something an external benchmark needs on this machine. */
-export type BenchRequirement = 'docker' | 'harbor';
-/**
- * How far an external benchmark is integrated: `planned` means the Harbor
- * runner that will run it with DSH as the agent is not built yet.
- */
-export type BenchIntegration = 'planned';
-/** One external benchmark. */
-export interface BenchCatalogEntry {
+/** Category titles and one-line purposes. */
+export declare const CATEGORIES: Readonly<Record<CategoryId, {
+    title: Bilingual;
+    purpose: Bilingual;
+}>>;
+/** Why a listed benchmark is not run here. */
+export type Blocker = 'expert-grading' | 'checkers' | 'docker' | 'gated' | 'multi-turn' | 'images' | 'generator' | 'pairwise' | 'human-votes' | 'not-public' | 'no-license' | 'large-data' | 'test-harness' | 'browser';
+/** Explanation of each blocker. */
+export declare const BLOCKERS: Readonly<Record<Blocker, Bilingual>>;
+/** Turns fetched rows into tasks. */
+export interface BenchmarkAdapter {
+    /** Adapter version; bump when a prompt or grader spec changes. */
+    version: string;
+    /** Where rows come from. */
+    source: DataSource;
+    /** Primary measure. */
+    metric: 'pass' | 'score';
+    /** Whether grading calls a judge model. */
+    judged: boolean;
+    /** Rows the adapter can turn into a task. */
+    usable?: (row: Record<string, unknown>) => boolean;
+    /**
+     * Build one task.
+     * @param item - the fetched row with its id.
+     * @param extras - auxiliary rows of the source, by name.
+     * @returns the task.
+     */
+    task(item: DatasetRow, extras: Readonly<Record<string, readonly Record<string, unknown>[]>>): BenchTask;
+}
+/** One catalog row. */
+export interface CatalogEntry {
+    /** Catalog id; also the suite id of a runnable entry. */
     id: string;
+    /** Category tab. */
+    category: CategoryId;
+    /** Display name (a proper name, the same in both languages). */
     name: string;
-    tier: BenchTier;
-    tags: string[];
-    summary: BenchText;
-    /** Project page or repository. */
-    source: string;
+    /** What it measures. */
+    summary: Bilingual;
+    /** Repository or dataset link. */
+    source: {
+        label: string;
+        url: string;
+    };
+    /** Paper link, when there is one. */
+    paper?: {
+        label: string;
+        url: string;
+    };
+    /** License as read from the source. */
     license: string;
-    /** Pinned revision of the task set this entry describes. */
-    revision?: string;
-    harness: string;
-    hardware: BenchText;
-    timePerTask: BenchText;
-    /** Published scores, which is what places the entry in its tier. */
-    evidence: BenchText;
-    requires: BenchRequirement[];
-    integration: BenchIntegration;
-    /** What the planned integration still lacks. */
-    note: BenchText;
-}
-/** External benchmarks, in display order within each tier. */
-export declare const BENCH_CATALOG: readonly BenchCatalogEntry[];
-/** What this machine has for external benchmarks. */
-export interface BenchEnvironment {
-    docker: boolean;
-    harbor: boolean;
-}
-/** Probes, injectable for tests. */
-export interface EnvironmentProbes {
-    run(command: string, args: readonly string[], timeoutMs: number): Promise<boolean>;
-    exists(path: string): Promise<boolean>;
-    env: NodeJS.ProcessEnv;
-    home: string;
+    /** Items in the source, as read on 2026-10-28; absent when not counted. */
+    items?: number;
+    /** Measurement caveat shown on the card. */
+    caveat?: Bilingual;
+    /** Runnable here, the bundled suite, or why not. */
+    status: {
+        kind: 'runnable';
+        adapter: BenchmarkAdapter;
+    } | {
+        kind: 'bundled';
+    } | {
+        kind: 'blocked';
+        blocker: Blocker;
+    } | {
+        kind: 'reference';
+        blocker: Blocker;
+    };
 }
 /**
- * Check this machine for a running Docker and for Harbor. A GUI app's
- * PATH often lacks Homebrew and `~/.local/bin`, so those are searched too.
- * @param probes - injectable probes.
- * @returns what is available.
+ * A multiple-choice prompt.
+ * @param question - the question text.
+ * @param options - option texts in display order.
+ * @returns the prompt.
  */
-export declare function probeEnvironment(probes?: EnvironmentProbes): Promise<BenchEnvironment>;
+export declare function choicePrompt(question: string, options: readonly string[]): string;
 /**
- * Requirements an entry still lacks on this machine.
- * @param entry - the catalog entry.
- * @param environment - the probe result.
- * @returns the missing requirements.
+ * Options in a seeded order with the letter of the correct one.
+ * @param correct - correct option text.
+ * @param wrong - distractors.
+ * @param seed - per-item seed.
+ * @returns the ordered options and the key letter.
  */
-export declare function missingRequirements(entry: BenchCatalogEntry, environment: BenchEnvironment): BenchRequirement[];
-/** Baseline success at or above this, over enough runs, reads as saturated. */
-export declare const SATURATION_SUCCESS = 0.9;
-/** Fewest baseline runs that can show saturation. */
-export declare const SATURATION_MIN_RUNS = 10;
+export declare function shuffledChoices(correct: string, wrong: readonly string[], seed: number): {
+    options: string[];
+    key: string;
+};
+/**
+ * A stable numeric seed from an item id.
+ * @param id - item id.
+ * @returns a 32-bit seed.
+ */
+export declare function seedOf(id: string): number;
+/**
+ * Extract the SimpleQA grader template from `simpleqa_eval.py`.
+ * @param source - the Python file text.
+ * @returns the template, with `{question}`, `{target}` and `{predicted_answer}` placeholders.
+ */
+export declare function simpleQaTemplate(source: string): string;
+/** Every catalog row, grouped by category in display order. */
+export declare const CATALOG: readonly CatalogEntry[];
+/**
+ * A catalog row by id.
+ * @param id - catalog id.
+ * @returns the row, or `undefined`.
+ */
+export declare function catalogEntry(id: string): CatalogEntry | undefined;
+/**
+ * The suite of one runnable catalog row: its tasks are the rows an
+ * experiment pinned, read back from the dataset cache. Without an
+ * experiment it lists no tasks, because the population is never loaded whole.
+ * @param entry - a runnable row.
+ * @param datasets - the dataset cache.
+ * @returns the suite.
+ */
+export declare function datasetSuite(entry: CatalogEntry & {
+    status: {
+        kind: 'runnable';
+    };
+}, datasets: DatasetStore): BenchSuite;
+/**
+ * Suites of every runnable catalog row.
+ * @param datasets - the dataset cache.
+ * @returns the suites.
+ */
+export declare function datasetSuites(datasets: DatasetStore): BenchSuite[];

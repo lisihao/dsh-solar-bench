@@ -21,8 +21,6 @@ const suiteHeader = z.object({
   id: z.string().regex(/^[a-z0-9][a-z0-9-]*$/, 'lowercase letters, digits, and dashes'),
   version: z.string().min(1),
   description: z.string().min(1),
-  tier: z.enum(['floor', 'ceiling']).optional(),
-  tags: z.array(z.string().regex(/^[a-z0-9][a-z0-9-]*$/)).optional(),
 }).strict()
 
 const taskLine = z.object({
@@ -107,8 +105,6 @@ export async function loadDeclarativeSuite(dir: string): Promise<BenchSuite> {
     id: header.data.id as BenchSuiteId,
     version: header.data.version,
     description: header.data.description,
-    ...header.data.tier === undefined ? {} : { tier: header.data.tier },
-    ...header.data.tags === undefined ? {} : { tags: header.data.tags },
     async load(signal) {
       return parseTasks(dir, await readFile(tasksFile, { encoding: 'utf8', signal }), tasksFile)
     },

@@ -6,7 +6,9 @@
  * @module @lisihao/dsh-solar-bench/cell
  */
 
+import { execFile } from 'node:child_process'
 import { constants, cp, mkdir, rm, stat } from 'node:fs/promises'
+import { promisify } from 'node:util'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import SessionStore from '@deepseek-ai/dsh-session'
@@ -87,9 +89,16 @@ export async function scrubTemplateFiles(home: string, files: readonly string[])
  */
 const HOST_ONLY_ENV = ['NODE_CHANNEL_FD', 'NODE_CHANNEL_SERIALIZATION_MODE', 'NODE_UNIQUE_ID', 'DSH_CLIENT_VERSION']
 
+/**
+ * Credential-shaped variables of the host environment are not inherited: a run
+ * gets exactly the keys its experiment resolved, through the run options.
+ */
+const CREDENTIAL_ENV = /(?:_API_KEY|_ACCESS_TOKEN|_AUTH_TOKEN|_SECRET|_SECRET_KEY)$/
+
 export function cellEnv(base: NodeJS.ProcessEnv, dirs: CellDirs, variant: Variant): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...base, DSH_HOME: dirs.home }
   for (const name of HOST_ONLY_ENV) delete env[name]
+  for (const name of Object.keys(env)) if (CREDENTIAL_ENV.test(name)) delete env[name]
   for (const [name, value] of Object.entries(variant.env)) env[name] = value.replaceAll('{cell}', dirs.state)
   return env
 }
@@ -132,4 +141,32 @@ export async function readRunSessions(home: string): Promise<RunSessions> {
   } finally {
     await ctx.fiber.dispose()
   }
+}
+
+/**
+ * Stop processes a run left behind, such as a plugin's detached daemon: every
+ * process of this user, other than this one, whose command line contains the
+ * run's own directory. Processes are matched by that unique path only, never by
+ * name, so nothing outside the run is touched.
+ * @param dir - the run directory (`cells/<variant>/<task>/<rep>`).
+ * @param graceMs - wait after SIGTERM before SIGKILL.
+ * @returns the pids that were signalled.
+ */
+export async function reapCellProcesses(dir: string, graceMs = 3000): Promise<number[]> {
+  const { stdout } = await promisify(execFile)('ps', ['-axww', '-o', 'pid=,uid=,command='], { maxBuffer: 16 * 1024 * 1024 })
+  const uid = process.getuid?.()
+  const pids: number[] = []
+  for (const line of stdout.split('\n')) {
+    const match = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line)
+    if (match === null) continue
+    const pid = Number(match[1])
+    if (pid === process.pid || Number(match[2]) !== uid || !(match[3] as string).includes(dir)) continue
+    pids.push(pid)
+  }
+  const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true } catch { return false } }
+  for (const pid of pids) { try { process.kill(pid, 'SIGTERM') } catch { /* already gone */ } }
+  const deadline = Date.now() + graceMs
+  while (pids.some(alive) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 50))
+  for (const pid of pids.filter(alive)) { try { process.kill(pid, 'SIGKILL') } catch { /* already gone */ } }
+  return pids
 }

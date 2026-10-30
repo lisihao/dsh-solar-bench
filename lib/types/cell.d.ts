@@ -58,3 +58,13 @@ export interface RunSessions {
  * @throws Error when the run did not persist exactly one top-level session.
  */
 export declare function readRunSessions(home: string): Promise<RunSessions>;
+/**
+ * Stop processes a run left behind, such as a plugin's detached daemon: every
+ * process of this user, other than this one, whose command line contains the
+ * run's own directory. Processes are matched by that unique path only, never by
+ * name, so nothing outside the run is touched.
+ * @param dir - the run directory (`cells/<variant>/<task>/<rep>`).
+ * @param graceMs - wait after SIGTERM before SIGKILL.
+ * @returns the pids that were signalled.
+ */
+export declare function reapCellProcesses(dir: string, graceMs?: number): Promise<number[]>;

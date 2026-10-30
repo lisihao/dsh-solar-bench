@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Solar Benchmarks",
-    "description": "Ablation experiments that measure whether a plugin improves success, tokens, cost, and time, with a Benchmarks page in Settings."
+    "description": "Run recognized public benchmarks by category from a conversation's Benchmarks tab, compare plugins on a fixed model within a budget, and analyze whether they work, help, and change cost or speed."
   }
 }

@@ -6,9 +6,12 @@
 //   hang                 never exit (exercises the run timeout)
 //   persist-hang         persist the sessions, then never exit
 //   nosession            exit 1 without persisting a session
+//   spawn-detached       start a detached child naming the workspace, persist, exit 0
+//   anything else        persist the sessions and exit 0
 // It also prints the model key it received, so redaction can be checked,
 // writes its pid to FAKE_DSH_PID when set, and, when FAKE_DSH_INACTIVE names
 // a package, prints dsh's "did not activate" warning for a row of it.
+import { spawn } from 'node:child_process'
 import { cpSync, existsSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -24,8 +27,16 @@ writeFileSync(join(process.cwd(), 'launch.json'), JSON.stringify({
   home: process.env.DSH_HOME,
   extra: process.env.FAKE_EXTRA,
   credentials: existsSync(join(process.env.DSH_HOME, 'credentials.yaml')),
+  keys: Object.keys(process.env).filter(name => name.endsWith('_API_KEY')).sort(),
 }))
-if (prompt === 'hang') setInterval(() => {}, 1000)
+if (prompt === 'spawn-detached') {
+  // A plugin daemon that outlives the run: detached, its argv naming the run's workspace.
+  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', process.cwd()], { detached: true, stdio: 'ignore' })
+  child.unref()
+  writeFileSync(join(process.cwd(), 'daemon.pid'), String(child.pid))
+  cpSync(process.env.FAKE_DSH_SESSIONS, join(process.env.DSH_HOME, 'sessions'), { recursive: true })
+}
+else if (prompt === 'hang') setInterval(() => {}, 1000)
 else if (prompt === 'persist-hang') {
   cpSync(process.env.FAKE_DSH_SESSIONS, join(process.env.DSH_HOME, 'sessions'), { recursive: true })
   setInterval(() => {}, 1000)
@@ -33,7 +44,10 @@ else if (prompt === 'persist-hang') {
 else if (prompt === 'nosession') process.exit(1)
 else {
   cpSync(process.env.FAKE_DSH_SESSIONS, join(process.env.DSH_HOME, 'sessions'), { recursive: true })
-  const [, file, text] = prompt.split(':')
-  writeFileSync(join(process.cwd(), file), text)
+  // Any other prompt (a benchmark question) only persists the prepared sessions.
+  if (prompt.startsWith('write:')) {
+    const [, file, text] = prompt.split(':')
+    writeFileSync(join(process.cwd(), file), text)
+  }
   process.stdout.write('done\n')
 }

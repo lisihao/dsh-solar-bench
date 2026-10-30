@@ -101,6 +101,8 @@ describe('BenchRuntime.run', () => {
       home: join(cell('plus', 't1', 1), 'home'),
       extra: join(cell('plus', 't1', 1), 'state', 'mnemon'),
       credentials: true,
+      // No host credential variable reaches a child unless the run passes it.
+      keys: [],
     })
     const baseline = JSON.parse(await readFile(join(cell('baseline', 't1', 0), 'workspace', 'launch.json'), 'utf8')) as Record<string, unknown>
     expect(baseline.argv).toEqual(['--profile', 'headless', 'write:out.txt:yes'])
@@ -254,3 +256,12 @@ async function realpathOf(path: string): Promise<string> {
   const { realpath } = await import('node:fs/promises')
   return realpath(path)
 }
+
+describe('shipped provider failure codes', () => {
+  it('treat the code a real rc.2 run recorded for a rejected key as unmeasurable', async () => {
+    const { PROVIDER_FAILURE_CODES } = await import('../src/runtime.js')
+    // Observed 2026-10-28: turn/end reason.error = { code: 'AUTH', status: 401, message: 'Authentication Fails, …' }.
+    expect(PROVIDER_FAILURE_CODES).toContain('AUTH')
+    expect(PROVIDER_FAILURE_CODES).toEqual(expect.arrayContaining(['INVALID_CREDENTIAL', 'QUOTA', 'ACCOUNT_QUOTA']))
+  })
+})

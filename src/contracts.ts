@@ -4,6 +4,7 @@
  * @module @lisihao/dsh-solar-bench/contracts
  */
 
+import type { BenchInsights } from './insights.js'
 import type { Experiment, ExperimentAnalysis, RunRecord } from './types.js'
 
 /** One row of {@link BenchExperimentList}. */
@@ -16,6 +17,8 @@ export interface BenchExperimentListItem {
   variants: string[]
   /** Runs per (task, variant). */
   repetitions: number
+  /** Catalog id of the sampled benchmark; absent for a bundled suite run by the first build. */
+  benchmark?: string
   /** Recorded runs. */
   runs: number
   /** End time of the latest recorded run, epoch milliseconds; `null` before the first run. */
@@ -58,4 +61,6 @@ export interface BenchDetailInput {
 export interface BenchLedgersApi {
   list(): Promise<BenchExperimentList>
   detail(input: BenchDetailInput): Promise<BenchExperimentDetail>
+  /** The cross-experiment Overview. */
+  insights(): Promise<BenchInsights>
 }

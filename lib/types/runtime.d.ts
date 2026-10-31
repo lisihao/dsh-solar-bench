@@ -12,6 +12,7 @@ import { Service } from '@deepseek-ai/cordis';
 import type { Context } from '@deepseek-ai/cordis';
 import z from '@deepseek-ai/schemastery';
 import type { JudgeReply } from './judge.js';
+import type { ContainerLister } from './harbor.js';
 import type { ModelPrice } from './metrics.js';
 import type { AnalysisOptions, CellKey, Experiment, ExperimentId, JudgeRequest, LedgerSnapshot, RunProgress, RunRecord } from './types.js';
 declare module '@deepseek-ai/cordis' {
@@ -82,7 +83,30 @@ export interface RunOptions {
     profileHome?: string;
     /** The judge of judged benchmarks; graders that need one fail the run as invalid without it. */
     judge?: (request: JudgeRequest, signal?: AbortSignal) => Promise<JudgeReply>;
+    /** How cells of a Harbor experiment run; required when the experiment carries `harbor`. */
+    harbor?: HarborRunOptions;
 }
+/** What the runtime needs to run Harbor trials. */
+export interface HarborRunOptions {
+    /** The `harbor` executable. */
+    executable: string;
+    /**
+     * The task directory of one task id, downloading it when needed.
+     * @param task - the task id.
+     * @param signal - cancellation.
+     */
+    taskDir: (task: string, signal?: AbortSignal) => Promise<string>;
+    /** Lists containers a job left behind; absent skips the check. */
+    listContainers?: ContainerLister;
+    /** Directory of the `docker` executable the probe found, put on Harbor's `PATH`. */
+    dockerDir?: string;
+    /** Seconds added to the agent time limit for image build, setup and verification before `harbor` is stopped. */
+    overheadSec?: number;
+    /** Grace between SIGTERM and SIGKILL when `harbor` is stopped, for tests. */
+    graceMs?: number;
+}
+/** Default allowance for a trial's build, setup and verifier phases beyond the agent's own time limit. */
+export declare const HARBOR_OVERHEAD_SEC: number;
 /**
  * Package names that a patch file's insert rows mount (`name:` values).
  * @param text - the patch YAML.
@@ -153,6 +177,18 @@ export declare class BenchRuntime extends Service {
      * @returns the cell's record.
      */
     private runCell;
+    /**
+     * Run one cell as a Harbor trial: DSH runs in the task container, Harbor's
+     * verifier grades it, and the trial's agent log and session files are folded
+     * here like a local run's. The key reaches Harbor only through its environment.
+     * @param experiment - a Harbor experiment.
+     * @param suite - the experiment's suite.
+     * @param ledgerDir - the experiment ledger directory.
+     * @param job - the cell with its task and variant.
+     * @param options - cancellation, progress, the key and the Harbor dependencies.
+     * @returns the cell's record.
+     */
+    private runHarborCell;
     /**
      * Run the dsh child to exit, killing it at the run timeout.
      * @param launcher - the launcher executable.

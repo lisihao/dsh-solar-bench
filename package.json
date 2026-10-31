@@ -27,12 +27,14 @@
   },
   "files": [
     "lib",
+    "harbor",
     "suite",
     "locale",
     "icon.svg",
     "cordis.patch.yml",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "UPGRADING.md"
   ],
   "license": "MIT",
   "author": {
@@ -69,7 +71,8 @@
     "@deepseek-ai/dsh-client-ui-slots": "0.2.1-rc.2",
     "react": "^18.3.1",
     "@deepseek-ai/dsh-credentials": "0.2.1-rc.2",
-    "@deepseek-ai/dsh-client-ui-conversation": "0.2.1-rc.2"
+    "@deepseek-ai/dsh-client-ui-conversation": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-tools": "0.2.1-rc.2"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.5",
@@ -93,7 +96,8 @@
     "react": "18.3.1",
     "react-dom": "18.3.1",
     "typescript": "^5.9.0",
-    "vitest": "^3.2.0"
+    "vitest": "^3.2.0",
+    "@deepseek-ai/dsh-tools": "0.2.1-rc.2"
   },
   "dependencies": {
     "yaml": "2.9.1",

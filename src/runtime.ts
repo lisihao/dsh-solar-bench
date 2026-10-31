@@ -18,11 +18,13 @@ import type { BenchSuite, BenchTask, BenchTaskId } from './types.js'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import z from '@deepseek-ai/schemastery'
 import { seedOf } from './catalog.js'
-import { cellEnv, prepareCell, readRunSessions, reapCellProcesses, scrubTemplateFiles } from './cell.js'
+import { cellEnv, keepEarlierAttempt, prepareCell, readRunSessions, reapCellProcesses, scrubTemplateFiles } from './cell.js'
 import { permutation } from './datasets.js'
 import { finalText, parseAnswer } from './answer-graders.js'
 import type { JudgeReply } from './judge.js'
 import { cellKey, experimentFormatVersion, ExperimentLedger, listExperimentIds, readPinnedExperiment } from './ledger.js'
+import { AGENT_DIR, classifyTrial, harborArgv, harborEnv, HARBOR_GRADER, HARBOR_PASS_REWARD, readHarborTrial, runHarbor, taskAgentTimeoutSec } from './harbor.js'
+import type { ContainerLister } from './harbor.js'
 import { foldRunMetrics } from './metrics.js'
 import type { ModelPrice } from './metrics.js'
 import type { AnalysisOptions, CellKey, Experiment, ExperimentId, JudgeRequest, JudgeUsage, LedgerSnapshot, RunProgress, RunRecord, Variant } from './types.js'
@@ -123,7 +125,32 @@ export interface RunOptions {
   profileHome?: string
   /** The judge of judged benchmarks; graders that need one fail the run as invalid without it. */
   judge?: (request: JudgeRequest, signal?: AbortSignal) => Promise<JudgeReply>
+  /** How cells of a Harbor experiment run; required when the experiment carries `harbor`. */
+  harbor?: HarborRunOptions
 }
+
+/** What the runtime needs to run Harbor trials. */
+export interface HarborRunOptions {
+  /** The `harbor` executable. */
+  executable: string
+  /**
+   * The task directory of one task id, downloading it when needed.
+   * @param task - the task id.
+   * @param signal - cancellation.
+   */
+  taskDir: (task: string, signal?: AbortSignal) => Promise<string>
+  /** Lists containers a job left behind; absent skips the check. */
+  listContainers?: ContainerLister
+  /** Directory of the `docker` executable the probe found, put on Harbor's `PATH`. */
+  dockerDir?: string
+  /** Seconds added to the agent time limit for image build, setup and verification before `harbor` is stopped. */
+  overheadSec?: number
+  /** Grace between SIGTERM and SIGKILL when `harbor` is stopped, for tests. */
+  graceMs?: number
+}
+
+/** Default allowance for a trial's build, setup and verifier phases beyond the agent's own time limit. */
+export const HARBOR_OVERHEAD_SEC = 4 * 3600
 
 /** Child output head kept for activation warnings, which print before the answer. */
 const OUTPUT_HEAD_BYTES = 16_000
@@ -209,7 +236,7 @@ export class BenchRuntime extends Service {
    */
   async run(experiment: Experiment, options: RunOptions = {}): Promise<RunRecord[]> {
     const { command } = this.config
-    if (command.length === 0) throw new Error('bench-runner: no command is configured, so this runtime only reads ledgers')
+    if (command.length === 0 && experiment.harbor === undefined) throw new Error('bench-runner: no command is configured, so this runtime only reads ledgers')
     const suite = this.ctx.solarBenchmarks.suite(experiment.suite)
     if (suite === undefined) throw new Error(`benchmark suite ${JSON.stringify(experiment.suite)} is not registered`)
     const tasks = this.selectTasks(experiment, await suite.load(options.signal, experiment))
@@ -242,7 +269,9 @@ export class BenchRuntime extends Service {
         options.signal?.throwIfAborted()
       }
     }
-    const workers = Array.from({ length: Math.min(this.config.concurrency, pending.length) }, worker)
+    // A Harbor trial owns its containers and may run for hours; trials never overlap.
+    const concurrency = experiment.harbor === undefined ? this.config.concurrency : 1
+    const workers = Array.from({ length: Math.min(concurrency, pending.length) }, worker)
     const settled = await Promise.allSettled(workers)
     for (const result of settled) if (result.status === 'rejected') throw result.reason
     return records
@@ -317,6 +346,7 @@ export class BenchRuntime extends Service {
     job: { cell: CellKey; task: BenchTask; variant: Variant },
     options: RunOptions,
   ): Promise<RunRecord> {
+    if (experiment.harbor !== undefined) return this.runHarborCell(experiment, suite, ledgerDir, job, options)
     const { signal } = options
     const secrets = Object.values(options.env ?? {}).filter(value => value.length >= 4)
     const redact = (text: string): string => secrets.reduce((result, secret) => result.replaceAll(secret, '[redacted]'), text)
@@ -410,6 +440,97 @@ export class BenchRuntime extends Service {
       signal?.throwIfAborted()
       return { ...base, status: 'invalid', metrics, models, ...extra(), error: `grader failed: ${redact((error as Error).message)}`, endedAt: Date.now() }
     }
+  }
+
+  /**
+   * Run one cell as a Harbor trial: DSH runs in the task container, Harbor's
+   * verifier grades it, and the trial's agent log and session files are folded
+   * here like a local run's. The key reaches Harbor only through its environment.
+   * @param experiment - a Harbor experiment.
+   * @param suite - the experiment's suite.
+   * @param ledgerDir - the experiment ledger directory.
+   * @param job - the cell with its task and variant.
+   * @param options - cancellation, progress, the key and the Harbor dependencies.
+   * @returns the cell's record.
+   */
+  private async runHarborCell(
+    experiment: Experiment,
+    suite: BenchSuite,
+    ledgerDir: string,
+    job: { cell: CellKey; task: BenchTask; variant: Variant },
+    options: RunOptions,
+  ): Promise<RunRecord> {
+    const pin = experiment.harbor as NonNullable<Experiment['harbor']>
+    const harbor = options.harbor
+    if (harbor === undefined) throw new Error('BENCH_HARBOR: this experiment runs through Harbor, but no Harbor executable was given')
+    if (experiment.driver?.kind !== 'model') throw new Error('BENCH_HARBOR: a Harbor experiment needs a model driver')
+    const { signal } = options
+    const key = options.env?.DEEPSEEK_API_KEY ?? ''
+    const secrets = Object.values(options.env ?? {}).filter(value => value.length >= 4)
+    const redact = (text: string): string => secrets.reduce((result, secret) => result.replaceAll(secret, '[redacted]'), text)
+    const startedAt = Date.now()
+    const dir = join(ledgerDir, 'cells', job.cell.variant, job.cell.task, String(job.cell.rep))
+    await keepEarlierAttempt(dir, this.config.templateFiles)
+    await mkdir(dir, { recursive: true })
+    const taskDir = await harbor.taskDir(job.task.id, signal)
+    const ownLimit = await taskAgentTimeoutSec(taskDir)
+    const jobName = `solar-bench-${experiment.id}-${job.cell.variant}-${job.cell.task}-${String(job.cell.rep)}`.toLowerCase().replace(/[^a-z0-9-]+/g, '-').slice(0, 120)
+    const pluginSpec = job.variant.env.SOLAR_BENCH_PLUGIN_SPEC
+    const trial = {
+      taskDir,
+      jobsDir: join(dir, 'jobs'),
+      jobName,
+      model: `deepseek/${experiment.driver.model}`,
+      agentTimeoutMultiplier: pin.agentTimeoutSec / ownLimit,
+      allowHosts: pin.allowHosts,
+      patches: experiment.shared ?? [],
+      ...pluginSpec === undefined ? {} : { pluginSpec },
+    }
+    options.onStart?.(job.cell)
+    let exit
+    try {
+      exit = await runHarbor(harbor.executable, harborArgv(trial), {
+        env: harborEnv(process.env, key, AGENT_DIR, [dirname(harbor.executable), ...harbor.dockerDir === undefined ? [] : [harbor.dockerDir]]),
+        cwd: dir,
+        deadlineMs: (pin.agentTimeoutSec + (harbor.overheadSec ?? HARBOR_OVERHEAD_SEC)) * 1000,
+        redact,
+        ...signal === undefined ? {} : { signal },
+        ...options.onOutput === undefined ? {} : { onOutput: (text: string) => { options.onOutput?.(job.cell, text) } },
+        ...harbor.graceMs === undefined ? {} : { graceMs: harbor.graceMs },
+      })
+    } finally {
+      const left = await harbor.listContainers?.(jobName).catch(() => []) ?? []
+      if (left.length > 0) options.onOutput?.(job.cell, `harbor left ${String(left.length)} container(s) of this run: ${left.join(', ')}\n`)
+    }
+    const base = { formatVersion: experimentFormatVersion(experiment), cell: job.cell, exitCode: exit.code, suiteVersion: suite.version, startedAt }
+    let result
+    try {
+      result = await readHarborTrial(trial.jobsDir, jobName)
+    } catch (error) {
+      signal?.throwIfAborted()
+      if (exit.timedOut) return { ...base, status: 'timeout', models: [], endedAt: Date.now() }
+      return { ...base, status: 'invalid', models: [], error: `${redact((error as Error).message)}\n${exit.output}`, endedAt: Date.now() }
+    }
+    const packages = (await Promise.all(job.variant.patches.map(async patch => patchPackageNames(await readFile(patch, 'utf8').catch(() => ''))))).flat()
+    const verdict = classifyTrial(result, inactivePatchRow(packages, redact(result.agentLog)))
+    let metrics
+    let models: string[] = []
+    let unavailable: string | undefined
+    try {
+      const sessions = await readRunSessions(result.dshHome)
+      const prices = [...(experiment.unbilledModels ?? []).map(model => ({ model, input: 0, output: 0, cacheRead: 0 })), ...this.config.prices]
+      ;({ metrics, models } = foldRunMetrics(sessions.root, sessions.children, prices))
+      unavailable = providerFailure(sessions.root, this.config.providerFailureCodes)
+    } catch {
+      // No session files: the agent never ran (an install or setup failure), which the verdict below names.
+    }
+    const measured = { ...metrics === undefined ? {} : { metrics }, models }
+    if (verdict.status === 'invalid' && verdict.error.startsWith('plugin under test')) return { ...base, status: 'invalid', ...measured, error: verdict.error, endedAt: Date.now() }
+    if (unavailable !== undefined) return { ...base, status: 'invalid', ...measured, error: `model unavailable: ${unavailable}`, endedAt: Date.now() }
+    if (verdict.status === 'invalid') return { ...base, status: 'invalid', ...measured, error: redact(verdict.error), endedAt: Date.now() }
+    if (verdict.status === 'timeout') return { ...base, status: 'timeout', ...measured, endedAt: Date.now() }
+    const grade = { pass: verdict.reward >= HARBOR_PASS_REWARD, score: verdict.reward, details: `harbor reward ${String(verdict.reward)}` }
+    return { ...base, status: 'graded', grade, grader: { kind: HARBOR_GRADER.kind, version: HARBOR_GRADER.version }, ...measured, endedAt: Date.now() }
   }
 
   /**

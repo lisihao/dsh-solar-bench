@@ -7,7 +7,7 @@
  */
 
 import { execFile } from 'node:child_process'
-import { constants, cp, mkdir, rm, stat } from 'node:fs/promises'
+import { constants, cp, mkdir, rename, rm, stat } from 'node:fs/promises'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
@@ -37,8 +37,32 @@ export interface HomeTemplate {
   files: readonly string[]
 }
 
+/** Suffix of an earlier, unrecorded attempt kept beside a cell's run directory: `<rep>.attempt-<n>`. */
+export const ATTEMPT_SUFFIX = '.attempt-'
+
 /**
- * Create a fresh run directory, replacing any partial one left by a crash.
+ * Keep the directory of an earlier attempt of this cell (a run that a stop or
+ * crash left unrecorded) instead of overwriting it: its leftover processes are
+ * stopped, its copied template files removed, and it is renamed to the next
+ * free `<dir>.attempt-<n>`.
+ * @param dir - the cell's run directory.
+ * @param templateFiles - home-relative template files copied into a run home.
+ * @returns the kept attempt's directory, or `undefined` when there was none.
+ */
+export async function keepEarlierAttempt(dir: string, templateFiles: readonly string[]): Promise<string | undefined> {
+  if (!await stat(dir).then(() => true, () => false)) return undefined
+  // A daemon of the earlier attempt names the old path; the new attempt's reaper would no longer match it.
+  await reapCellProcesses(dir).catch(() => [])
+  await scrubTemplateFiles(join(dir, 'home'), templateFiles)
+  let n = 1
+  while (await stat(`${dir}${ATTEMPT_SUFFIX}${String(n)}`).then(() => true, () => false)) n += 1
+  const kept = `${dir}${ATTEMPT_SUFFIX}${String(n)}`
+  await rename(dir, kept)
+  return kept
+}
+
+/**
+ * Create a fresh run directory; a partial one left by an earlier attempt is kept beside it ({@link keepEarlierAttempt}).
  * Copies request copy-on-write clones, so a profile's `node_modules` costs
  * little per run where the filesystem supports them.
  * @param dir - absolute run directory.
@@ -48,7 +72,7 @@ export interface HomeTemplate {
  * @returns the run's directories.
  */
 export async function prepareCell(dir: string, fixture: string | undefined, template: HomeTemplate, profile: string): Promise<CellDirs> {
-  await rm(dir, { recursive: true, force: true })
+  await keepEarlierAttempt(dir, template.files)
   const dirs: CellDirs = { workspace: join(dir, 'workspace'), home: join(dir, 'home'), state: join(dir, 'state') }
   await mkdir(dirs.state, { recursive: true })
   const copy = { recursive: true, verbatimSymlinks: true, mode: constants.COPYFILE_FICLONE }

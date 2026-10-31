@@ -25,8 +25,20 @@ export interface HomeTemplate {
     /** Home-relative files copied into each run home when present, such as credentials and settings. */
     files: readonly string[];
 }
+/** Suffix of an earlier, unrecorded attempt kept beside a cell's run directory: `<rep>.attempt-<n>`. */
+export declare const ATTEMPT_SUFFIX = ".attempt-";
 /**
- * Create a fresh run directory, replacing any partial one left by a crash.
+ * Keep the directory of an earlier attempt of this cell (a run that a stop or
+ * crash left unrecorded) instead of overwriting it: its leftover processes are
+ * stopped, its copied template files removed, and it is renamed to the next
+ * free `<dir>.attempt-<n>`.
+ * @param dir - the cell's run directory.
+ * @param templateFiles - home-relative template files copied into a run home.
+ * @returns the kept attempt's directory, or `undefined` when there was none.
+ */
+export declare function keepEarlierAttempt(dir: string, templateFiles: readonly string[]): Promise<string | undefined>;
+/**
+ * Create a fresh run directory; a partial one left by an earlier attempt is kept beside it ({@link keepEarlierAttempt}).
  * Copies request copy-on-write clones, so a profile's `node_modules` costs
  * little per run where the filesystem supports them.
  * @param dir - absolute run directory.

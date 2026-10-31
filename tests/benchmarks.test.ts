@@ -16,7 +16,7 @@ import {
   mathEquivalent, mathGrader, numberGrader, numberOf, parseAnswer, parseCall, pythonTestsGrader,
 } from '../src/answer-graders.js'
 import { appBundle, APP_PYTHON } from '../src/app.js'
-import { CATALOG, CATEGORY_IDS, shuffledChoices, simpleQaTemplate } from '../src/catalog.js'
+import { ADAPTATIONS, CATALOG, CATEGORY_IDS, catalogEntry, protocolOf, resultProtocol, shuffledChoices, simpleQaTemplate } from '../src/catalog.js'
 import type { BenchmarkAdapter } from '../src/catalog.js'
 import { DatasetStore, permutation } from '../src/datasets.js'
 import type { Fetch } from '../src/datasets.js'
@@ -183,7 +183,7 @@ describe('catalog', () => {
     const rsi = CATALOG.filter(entry => entry.category === 'rsi')
     expect(rsi.map(entry => entry.id)).toEqual(['rsi-exam'])
     for (const entry of rsi) expect(entry.tier, entry.id).toBe('ceiling')
-    expect(CATALOG.find(entry => entry.id === 'rsi-exam')?.status).toEqual({ kind: 'blocked', blocker: 'harbor' })
+    expect(CATALOG.find(entry => entry.id === 'rsi-exam')?.status).toEqual({ kind: 'harbor' })
     const byName = new Map<string, Set<string>>()
     for (const entry of CATALOG) byName.set(entry.name, (byName.get(entry.name) ?? new Set()).add(entry.tier))
     for (const [name, tiers] of byName) expect(tiers.size, name).toBe(1)
@@ -375,7 +375,7 @@ describe('insights', () => {
     expect(row).toMatchObject({ benchmark: 'gsm8k', category: 'math', name: 'GSM8K', metric: 'pass' })
     expect(row?.cells['plugin:@acme/mem:deepseek-official/deepseek-flash']).toMatchObject({ value: 1, verdict: 'improved', experiment: 'e2', delta: 1 })
     expect(row?.cells['baseline:deepseek-official/deepseek-flash']).toMatchObject({ value: 0, experiment: 'e2' })
-    expect(insights.configs).toEqual([expect.objectContaining({ experiment: 'e2', items: 5, driver: 'deepseek-official/deepseek-flash', webTools: false, globalSkills: true, judge: null })])
+    expect(insights.configs).toEqual([expect.objectContaining({ experiment: 'e2', items: 5, driver: 'deepseek-official/deepseek-flash', webTools: false, globalSkills: true, protocol: 'subset', judge: null })])
     expect(insights.health).toEqual([expect.objectContaining({ plugin: '@acme/mem', versions: ['1.0.0', '1.1.0'], experiments: 2, runs: 11, loadFailures: 1, invalid: 1 })])
     expect(insights.comparisons.map(entry => [entry.version, entry.verdict])).toEqual([['1.0.0', 'underpowered'], ['1.1.0', 'improved']])
     expect(insights.comparisons[1]?.costDelta).toBeCloseTo(0.01)
@@ -451,8 +451,32 @@ describe('insights', () => {
   })
 })
 
+describe('protocol identity', () => {
+  it('marks entries faithful, adapted with the change named, or diagnostic', () => {
+    expect(protocolOf(catalogEntry('gsm8k')!)).toBe('faithful')
+    expect(protocolOf(catalogEntry('humaneval')!)).toBe('faithful')
+    for (const id of ['bfcl-simple', 'mmlu-pro', 'math-500', 'simpleqa', 'mt-bench', 'longbench-v2', 'chembench', 'scienceqa']) {
+      expect(protocolOf(catalogEntry(id)!)).toBe('adapted')
+      expect(ADAPTATIONS[id]?.zh.length).toBeGreaterThan(0)
+    }
+    expect(protocolOf(catalogEntry('dsh-native')!)).toBe('diagnostic')
+    expect(Object.keys(ADAPTATIONS).every(id => catalogEntry(id) !== undefined)).toBe(true)
+  })
+
+  it('says whether a result covers every item, a sample, or an unverified total', () => {
+    const gsm8k = catalogEntry('gsm8k')!
+    expect(gsm8k.items).toBeGreaterThan(20)
+    expect(resultProtocol(gsm8k, 20)).toBe('subset')
+    expect(resultProtocol(gsm8k, gsm8k.items!)).toBe('full')
+    expect(resultProtocol({ ...gsm8k, items: undefined }, 20)).toBe('sampled')
+    expect(resultProtocol(catalogEntry('mmlu-pro')!, 20)).toBe('adapted')
+    expect(resultProtocol(catalogEntry('dsh-native')!, 5)).toBe('diagnostic')
+    expect(resultProtocol(undefined, 5)).toBe('sampled')
+  })
+})
+
 describe('tier pills', () => {
-  const item = (tier: 'floor' | 'ceiling'): BenchCatalogItem => ({ id: 'x', category: 'math', tier, name: 'X', summary: { zh: '摘要', en: 'Summary' }, source: { label: 's', url: 'https://example.com' }, license: 'MIT', status: 'runnable', metric: 'pass', judged: false })
+  const item = (tier: 'floor' | 'ceiling'): BenchCatalogItem => ({ id: 'x', category: 'math', tier, name: 'X', summary: { zh: '摘要', en: 'Summary' }, source: { label: 's', url: 'https://example.com' }, license: 'MIT', status: 'runnable', metric: 'pass', judged: false, protocol: 'faithful' })
   const render = (lang: string, tier: 'floor' | 'ceiling', saturated: boolean): string => {
     const holder = globalThis as { document?: unknown }
     holder.document = { documentElement: { lang } }

@@ -4,7 +4,7 @@
  * does it change cost or speed, and how did that move across its versions.
  * @module @lisihao/dsh-solar-bench/insights
  */
-import type { BenchTier, CategoryId } from './catalog.js';
+import type { BenchTier, CategoryId, ResultProtocol } from './catalog.js';
 import type { AnalysisOptions, LedgerSnapshot, Verdict } from './types.js';
 /** One scoreboard column: the baseline under one driver, or one plugin. */
 export interface ScoreColumn {
@@ -87,6 +87,8 @@ export interface ScoreConfig {
     webTools: boolean | null;
     /** Whether runs saw the user's global skills; experiments before format 3 did. */
     globalSkills: boolean;
+    /** What the result stands for relative to the benchmark's own protocol. */
+    protocol: ResultProtocol;
     judge: string | null;
     endedAt: number | null;
 }

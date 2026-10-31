@@ -11,7 +11,8 @@
  * environment.
  * @module @lisihao/dsh-solar-bench/runs
  */
-import type { BenchTier, Bilingual, CategoryId } from './catalog.js';
+import type { BenchTier, Bilingual, CategoryId, ProtocolKind } from './catalog.js';
+import type { ContainerLister, HarborEnvironment, HarborMissing } from './harbor.js';
 import type { DatasetStore } from './datasets.js';
 import type { JudgeReply } from './judge.js';
 import type { DriverOption, ProviderPlugin } from './providers.js';
@@ -69,6 +70,15 @@ export interface BenchCatalogItem {
     reason?: Bilingual;
     metric: 'pass' | 'score';
     judged: boolean;
+    /** How it runs relative to the benchmark's own protocol. */
+    protocol: ProtocolKind;
+    /** What is changed, for an adapted entry. */
+    adaptation?: Bilingual;
+    /** Set for a container benchmark run through Harbor: what this computer still lacks (empty when it can start). */
+    container?: {
+        missing: HarborMissing[];
+        harborVersion: string;
+    };
 }
 /** Recorded spend of earlier runs, for the estimate. */
 export interface BenchCostHistory {
@@ -92,6 +102,8 @@ export interface BenchRunChoices {
     }[];
     /** Every catalog row. */
     catalog: BenchCatalogItem[];
+    /** That every run goes through the DSH agent, so scores do not compare with public leaderboards. */
+    protocolNote: Bilingual;
     /** Plugins that can be compared with the baseline, or used as the scheduling driver. */
     plugins: Omit<BenchPluginCandidate, 'patch'>[];
     /** Driver models: built-in DeepSeek, the source profile's OpenAI-compatible routes, and provider plugins. */
@@ -142,6 +154,8 @@ export interface BenchStartInput {
     webTools: boolean;
     /** Whether runs see the user's global skills (`~/.agents/skills`); off gives each experiment an empty skills home. */
     globalSkills: boolean;
+    /** Agent time limit of one trial in seconds, for a container benchmark. */
+    agentTimeoutSec?: number;
 }
 /** One finished run as the progress view lists it. */
 export interface BenchJobRun {
@@ -245,9 +259,30 @@ export interface BenchRunDeps {
      * @param key - the DeepSeek key.
      */
     judge: (model: BenchDriverModel, key: string) => (request: JudgeRequest, signal?: AbortSignal) => Promise<JudgeReply>;
+    /** Container benchmarks; absent leaves them not startable. */
+    harbor?: {
+        /** Probe Docker and Harbor. */
+        probe: () => Promise<HarborEnvironment>;
+        /** The directory of one task, downloading it when needed. */
+        taskDir: (task: string, signal?: AbortSignal) => Promise<string>;
+        /** Lists containers a job left behind, from the probed `docker`; defaults to `docker ps`. */
+        listContainers?: (docker: string) => ContainerLister;
+    };
     /** Clock, for tests. */
     now?: () => Date;
 }
+/** Agent time limit of a container trial when the form sets none. */
+export declare const DEFAULT_AGENT_TIMEOUT_SEC = 3600;
+/**
+ * How the plugin under test is installed in a task container: the source
+ * profile's own dependency spec. A local tarball is uploaded; npm and git
+ * specs are installed there with network during setup.
+ * @param profileDir - the source profile directory.
+ * @param name - the plugin package name.
+ * @returns an absolute tarball path, a git or https spec, or `name@version`.
+ * @throws Error when the profile links the plugin from a directory, which a container cannot reach.
+ */
+export declare function pluginInstallSpec(profileDir: string, name: string): Promise<string>;
 /**
  * The patch that sets the run's default model.
  * @param model - the driver model.

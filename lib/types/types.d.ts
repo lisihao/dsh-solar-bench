@@ -187,6 +187,17 @@ export interface Experiment {
     subscriptionAccepted?: true;
     /** Whether runs saw the user's global skills (`~/.agents/skills`); absent in experiments before format 3, which did. */
     globalSkills?: boolean;
+    /** Set when every cell runs as a Harbor trial in a task container (format 4). */
+    harbor?: ExperimentHarbor;
+}
+/** How a container benchmark's trials ran, pinned at the start. */
+export interface ExperimentHarbor {
+    /** Harbor version the trials ran under. */
+    version: string;
+    /** Agent time limit of one trial, in seconds. */
+    agentTimeoutSec: number;
+    /** Hosts the agent could reach during its run. */
+    allowHosts: readonly string[];
 }
 /** Coordinates of one run inside an experiment. */
 export interface CellKey {
@@ -270,7 +281,7 @@ export interface JudgeUsage {
 /** One ledger line: everything needed to analyze and reproduce one run. */
 export interface RunRecord {
     /** Record format version: 1, or 2 when it may carry `judge` and `answer`. */
-    formatVersion: 1 | 2 | 3;
+    formatVersion: 1 | 2 | 3 | 4;
     /** Run coordinates. */
     cell: CellKey;
     /** Terminal state. */

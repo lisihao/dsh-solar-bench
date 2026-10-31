@@ -6,9 +6,9 @@
  */
 
 import { analyzeExperiment } from './analysis.js'
-import { catalogEntry } from './catalog.js'
+import { catalogEntry, resultProtocol } from './catalog.js'
 import { NO_GLOBAL_SKILLS } from './format.js'
-import type { BenchTier, CategoryId } from './catalog.js'
+import type { BenchTier, CategoryId, ResultProtocol } from './catalog.js'
 import type { AnalysisOptions, Experiment, ExperimentAnalysis, LedgerSnapshot, RunRecord, Verdict } from './types.js'
 
 /** One scoreboard column: the baseline under one driver, or one plugin. */
@@ -124,6 +124,8 @@ export interface ScoreConfig {
   webTools: boolean | null
   /** Whether runs saw the user's global skills; experiments before format 3 did. */
   globalSkills: boolean
+  /** What the result stands for relative to the benchmark's own protocol. */
+  protocol: ResultProtocol
   judge: string | null
   endedAt: number | null
 }
@@ -226,6 +228,7 @@ export function buildInsights(ledgers: readonly LedgerSnapshot[], options: Analy
       driver,
       webTools: experiment.webTools ?? null,
       globalSkills: experiment.globalSkills ?? true,
+      protocol: resultProtocol(entry, experiment.tasks?.length ?? new Set(records.map(record => record.cell.task)).size),
       judge: experiment.judge === undefined ? null : `${experiment.judge.provider}/${experiment.judge.model}`,
       endedAt,
     })

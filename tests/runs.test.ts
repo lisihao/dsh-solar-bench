@@ -3,14 +3,14 @@
  * manager driving real child processes through the fake launcher.
  */
 
-import { appendFile, lstat, mkdir, mkdtemp, readdir, readFile, readlink, rm, writeFile } from 'node:fs/promises'
+import { appendFile, chmod, copyFile, lstat, mkdir, mkdtemp, readdir, readFile, readlink, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import { answerGraders, BenchRegistry, BenchRunManager, BenchRuntime, DatasetStore, DEFAULT_DRIVER_MODELS, listPluginCandidates, RUN_PROFILE, RUN_TEMPLATE_FILES, variantIdOf, writeRunTemplate } from '../src/index.js'
-import type { BenchJobStatus, BenchStartInput, BenchSuite, BenchTask, ModelPrice } from '../src/index.js'
+import { answerGraders, BenchRegistry, BenchRunManager, BenchRuntime, DatasetStore, DEFAULT_DRIVER_MODELS, HARBOR_GRADER, harborSuite, RSI_EXAM_TASKS, listPluginCandidates, RUN_PROFILE, RUN_TEMPLATE_FILES, variantIdOf, writeRunTemplate } from '../src/index.js'
+import type { BenchJobStatus, BenchRunDeps, BenchStartInput, BenchSuite, BenchTask, ModelPrice } from '../src/index.js'
 import type { JudgeReply } from '../src/judge.js'
 import type { ProviderPlugin } from '../src/providers.js'
 import * as catalog from '../src/catalog.js'
@@ -103,6 +103,7 @@ describe('BenchRunManager', () => {
     providerPlugins?: ProviderPlugin[]
     providerModels?: (provider: string) => Promise<{ id: string }[]>
     providerTimeoutMs?: number
+    harbor?: BenchRunDeps['harbor']
   }
   let judged: string[] = []
   let fetched: string[] = []
@@ -156,6 +157,8 @@ describe('BenchRunManager', () => {
         const { datasetSuites } = catalog
         for (const suite of datasetSuites(datasets)) registry.registerSuite(suite)
         for (const grader of answerGraders(process.execPath)) registry.registerGrader(grader)
+        registry.registerSuite(harborSuite('rsi-exam', RSI_EXAM_TASKS, 'rsi-exam@66f5493'))
+        registry.registerGrader(HARBOR_GRADER)
         const runtime = new BenchRuntime(inner, {
           command: [process.execPath, fakeDsh],
           templateHome: home,
@@ -175,6 +178,7 @@ describe('BenchRunManager', () => {
           ...options.providerPlugins === undefined ? {} : { providerPlugins: options.providerPlugins },
           ...options.providerModels === undefined ? {} : { providerModels: options.providerModels },
           ...options.providerTimeoutMs === undefined ? {} : { providerTimeoutMs: options.providerTimeoutMs },
+          ...options.harbor === undefined ? {} : { harbor: options.harbor },
           sourceProfile: profile,
           templateHome: join(home, 'solar', 'bench', 'template'),
           self: '@lisihao/dsh-solar-bench',
@@ -241,6 +245,66 @@ describe('BenchRunManager', () => {
     expect(runs.split('\n').filter(Boolean).every(line => (JSON.parse(line) as { formatVersion: number }).formatVersion === 3)).toBe(true)
     await expect(readFile(join(ledger, 'cells', 'acme-graph', (pinned.tasks as string[])[0] as string, '0', 'home', '.env'))).rejects.toThrow()
     expect((await manager.choices()).history).toEqual([{ benchmark: 'dsh-native', driver: 'deepseek-official/deepseek-flash', globalSkills: true, runs: 4, meanUsd: expect.any(Number) }])
+  })
+
+  describe('a container benchmark', () => {
+    const ready = { docker: true, dockerPath: '/usr/bin/docker', harbor: '', harborVersion: '0.25.0' }
+
+    async function harborFixture(): Promise<{ deps: NonNullable<BenchRunDeps['harbor']>; record: string }> {
+      const bin = join(root, 'bin')
+      await mkdir(bin, { recursive: true })
+      const executable = join(bin, 'harbor.mjs')
+      await copyFile(fileURLToPath(new URL('./fixtures/fake-harbor.mjs', import.meta.url)), executable)
+      await chmod(executable, 0o755)
+      await writeSessions(join(root, 'harbor-sessions'), [{ id: 'root', events: rootEvents() }])
+      const record = join(root, 'harbor-record.json')
+      await writeFile(join(bin, 'fake-harbor.json'), JSON.stringify({ record, mark: join(root, 'mark'), sessions: join(root, 'harbor-sessions'), result: { verifier_result: { rewards: { reward: 0.25 } } } }))
+      const task = join(root, 'task')
+      await mkdir(task, { recursive: true })
+      await writeFile(join(task, 'task.toml'), '[agent]\ntimeout_sec = 43200.0\n')
+      return { deps: { probe: () => Promise.resolve({ ...ready, harbor: executable }), taskDir: () => Promise.resolve(task), listContainers: () => () => Promise.resolve([]) }, record }
+    }
+
+    it('is listed with what this computer lacks and refuses to start until Docker and Harbor 0.25.0 are present', async () => {
+      const without = await mount()
+      expect((await without.choices()).catalog.find(item => item.id === 'rsi-exam')).toMatchObject({ status: 'blocked', metric: 'score', container: { missing: ['docker', 'harbor'], harborVersion: '0.25.0' } })
+      await expect(without.start(form({ benchmark: 'rsi-exam', plugins: [], sample: 1 }))).rejects.toThrow(/BENCH_HARBOR_MISSING: RSI-Exam needs docker, harbor/)
+      await ctx?.fiber.dispose()
+      const old = await mount({ harbor: { probe: () => Promise.resolve({ ...ready, harborVersion: '0.24.0' }), taskDir: () => Promise.reject(new Error('unused')) } })
+      expect((await old.choices()).catalog.find(item => item.id === 'rsi-exam')?.container?.missing).toEqual(['harbor-version'])
+    })
+
+    it('refuses a driver the container cannot reach', async () => {
+      const { deps } = await harborFixture()
+      const manager = await mount({ harbor: deps, providerPlugins: [{ provider: 'meter-route', plugin: 'dsh-cost-meter', label: 'Meter', billing: 'tokens' }], providerModels: () => Promise.resolve([{ id: 'm1' }]) })
+      await expect(manager.start(form({ benchmark: 'rsi-exam', plugins: [], sample: 1, driver: { kind: 'model', provider: 'meter-route', model: 'm1' } }))).rejects.toThrow(/BENCH_HARBOR_DRIVER: .*can reach only api\.deepseek\.com/)
+    })
+
+    it('pins a format 4 experiment, installs each plugin from its profile spec, and records rewards', async () => {
+      const { deps, record } = await harborFixture()
+      const manager = await mount({ harbor: deps })
+      const profile = join(root, 'home', 'profiles', 'desktop')
+      const manifest = JSON.parse(await readFile(join(profile, 'package.json'), 'utf8')) as Record<string, unknown>
+      await writeFile(join(profile, 'package.json'), JSON.stringify({ ...manifest, dependencies: { '@acme/graph': 'file:/abs/acme-graph-0.4.0.tgz' } }))
+      expect((await manager.choices()).catalog.find(item => item.id === 'rsi-exam')).toMatchObject({ status: 'runnable', container: { missing: [] } })
+      await expect(manager.start(form({ benchmark: 'rsi-exam', plugins: [], sample: 1, driver: { kind: 'scheduler', provider: 'deepseek-official', model: 'deepseek-flash', plugins: ['dsh-cost-meter'] } }))).rejects.toThrow(/BENCH_HARBOR_DRIVER/)
+      await expect(manager.start(form({ benchmark: 'rsi-exam', plugins: [], sample: 22 }))).rejects.toThrow(/21 tasks in scope/)
+      const { experimentId } = await manager.start(form({ benchmark: 'rsi-exam', plugins: ['@acme/graph'], sample: 1, agentTimeoutSec: 1800 }))
+      const status = await settle(manager)
+      expect(status).toMatchObject({ state: 'finished', total: 2, done: 2 })
+      expect(status.runs.map(run => run.outcome)).toEqual(['fail', 'fail'])
+      const ledger = join(root, 'home', 'solar', 'bench', 'ledgers', experimentId)
+      const pinned = JSON.parse(await readFile(join(ledger, 'experiment.json'), 'utf8')) as Record<string, unknown> & { shared: string[]; variants: { env: Record<string, string> }[] }
+      expect(pinned).toMatchObject({ formatVersion: 4, globalSkills: false, harbor: { version: '0.25.0', agentTimeoutSec: 1800, allowHosts: ['api.deepseek.com'] }, benchmark: { id: 'rsi-exam', metric: 'score' } })
+      expect(pinned.shared).toHaveLength(2)
+      expect(pinned.variants[1]?.env).toEqual({ SOLAR_BENCH_PLUGIN: '@acme/graph@0.4.0', SOLAR_BENCH_PLUGIN_SPEC: '/abs/acme-graph-0.4.0.tgz' })
+      const records = (await readFile(join(ledger, 'runs.jsonl'), 'utf8')).split('\n').filter(Boolean).map(line => JSON.parse(line) as { formatVersion: number; grade: { score: number } })
+      expect(records.map(entry => [entry.formatVersion, entry.grade.score])).toEqual([[4, 0.25], [4, 0.25]])
+      const seen = JSON.parse(await readFile(record, 'utf8')) as { argv: string[] }
+      expect(seen.argv).toContain('plugin_spec=/abs/acme-graph-0.4.0.tgz')
+      expect(seen.argv[seen.argv.indexOf('--agent-timeout-multiplier') + 1]).toBe(String(1800 / 43200))
+      await expect(readdir(join(root, 'home', 'solar', 'bench', 'template', 'profiles'))).rejects.toThrow()
+    })
   })
 
   it('leaves the global skills out through a shared skill-loader patch and keeps their cost history apart', async () => {

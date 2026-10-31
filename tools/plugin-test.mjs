@@ -154,7 +154,7 @@ async function readProbeMarker(path) {
   let marker
   try { marker = JSON.parse(await readFile(path, 'utf8')) } catch (error) { throw new Error(`bench probe marker is missing or invalid at ${path}: ${String(error)}`) }
   if (marker?.ok !== true) throw new Error(`bench probe reported failure: ${JSON.stringify(marker)}`)
-  for (const name of ['suite', 'ledgerRoot', 'list', 'detail', 'verdict', 'choices', 'catalog', 'insights']) {
+  for (const name of ['suite', 'ledgerRoot', 'list', 'detail', 'verdict', 'choices', 'catalog', 'insights', 'tools']) {
     if (marker.checks?.[name] !== true) throw new Error(`bench probe did not pass ${name}: ${JSON.stringify(marker)}`)
   }
   return marker

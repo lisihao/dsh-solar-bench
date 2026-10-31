@@ -93,6 +93,8 @@ export interface CatalogEntry {
     } | {
         kind: 'bundled';
     } | {
+        kind: 'harbor';
+    } | {
         kind: 'blocked';
         blocker: Blocker;
     } | {
@@ -138,6 +140,36 @@ export declare const CATALOG: readonly CatalogEntry[];
  * @returns the row, or `undefined`.
  */
 export declare function catalogEntry(id: string): CatalogEntry | undefined;
+/**
+ * How a catalog entry runs relative to the benchmark's own protocol:
+ * `faithful` keeps its items and scoring rule, `adapted` changes something
+ * (named in {@link ADAPTATIONS}), `diagnostic` is DSH's own task set.
+ */
+export type ProtocolKind = 'faithful' | 'adapted' | 'diagnostic';
+/** Every run goes through the DSH agent with this plugin's prompt, so no score is comparable with a public leaderboard. */
+export declare const PROTOCOL_NOTE: Bilingual;
+/** Where a runnable entry departs from the benchmark's own protocol, as checked against its source on 2026-10-31. */
+export declare const ADAPTATIONS: Readonly<Record<string, Bilingual>>;
+/**
+ * The protocol kind of a catalog entry.
+ * @param entry - the entry.
+ * @returns faithful, adapted or diagnostic.
+ */
+export declare function protocolOf(entry: CatalogEntry): ProtocolKind;
+/**
+ * What one experiment's result stands for: every item under the benchmark's
+ * own rule (`full`), a sample of them (`subset`), a sample of a set whose total
+ * is not verified (`sampled`), a changed protocol (`adapted`), or DSH's own
+ * tasks (`diagnostic`).
+ */
+export type ResultProtocol = 'full' | 'subset' | 'sampled' | 'adapted' | 'diagnostic';
+/**
+ * The protocol identity of an experiment's result.
+ * @param entry - its catalog entry, when the benchmark is still listed.
+ * @param tasks - items the experiment ran.
+ * @returns the identity.
+ */
+export declare function resultProtocol(entry: CatalogEntry | undefined, tasks: number): ResultProtocol;
 /**
  * The suite of one runnable catalog row: its tasks are the rows an
  * experiment pinned, read back from the dataset cache. Without an

@@ -12,14 +12,16 @@ export declare const LEDGER_FORMAT_VERSION = 1;
 export declare const LEDGER_FORMAT_VERSION_2 = 2;
 /** Format version of an experiment that records whether runs saw the user's global skills, and of its run records. */
 export declare const LEDGER_FORMAT_VERSION_3 = 3;
+/** Format version of an experiment run through Harbor (a container benchmark), and of its run records. */
+export declare const LEDGER_FORMAT_VERSION_4 = 4;
 /**
  * The format version an experiment is written with: the oldest that holds its
  * fields, so a resumed ledger still matches its pinned file and an older build
  * refuses only what it cannot read.
  * @param experiment - the definition.
- * @returns 1, 2 or 3.
+ * @returns 1, 2, 3 or 4.
  */
-export declare function experimentFormatVersion(experiment: Experiment): 1 | 2 | 3;
+export declare function experimentFormatVersion(experiment: Experiment): 1 | 2 | 3 | 4;
 /**
  * Stable string key of a cell.
  * @param cell - run coordinates.

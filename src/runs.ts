@@ -13,11 +13,13 @@
  */
 
 import { mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { dirname, isAbsolute, join } from 'node:path'
 import { z } from 'zod'
-import { BLOCKERS, CATALOG, CATEGORIES, CATEGORY_IDS, catalogEntry } from './catalog.js'
-import type { BenchTier, Bilingual, CategoryId } from './catalog.js'
+import { ADAPTATIONS, BLOCKERS, CATALOG, CATEGORIES, CATEGORY_IDS, catalogEntry, PROTOCOL_NOTE, protocolOf } from './catalog.js'
+import type { BenchTier, Bilingual, CategoryId, ProtocolKind } from './catalog.js'
 import { permutation } from './datasets.js'
+import { DEEPSEEK_HOST, dockerContainerLister, HARBOR_VERSION, harborMissing, RSI_EXAM, RSI_EXAM_TASKS } from './harbor.js'
+import type { ContainerLister, HarborEnvironment, HarborMissing } from './harbor.js'
 import type { DatasetStore } from './datasets.js'
 import type { JudgeReply } from './judge.js'
 import { piAiOptions, piAiPatch, piAiRoutes, pluginRows, protectedRowsIn, readProfilePatch, rowsPatch } from './providers.js'
@@ -75,6 +77,12 @@ export interface BenchCatalogItem {
   reason?: Bilingual
   metric: 'pass' | 'score'
   judged: boolean
+  /** How it runs relative to the benchmark's own protocol. */
+  protocol: ProtocolKind
+  /** What is changed, for an adapted entry. */
+  adaptation?: Bilingual
+  /** Set for a container benchmark run through Harbor: what this computer still lacks (empty when it can start). */
+  container?: { missing: HarborMissing[]; harborVersion: string }
 }
 
 /** Recorded spend of earlier runs, for the estimate. */
@@ -96,6 +104,8 @@ export interface BenchRunChoices {
   categories: { id: CategoryId; title: Bilingual; purpose: Bilingual }[]
   /** Every catalog row. */
   catalog: BenchCatalogItem[]
+  /** That every run goes through the DSH agent, so scores do not compare with public leaderboards. */
+  protocolNote: Bilingual
   /** Plugins that can be compared with the baseline, or used as the scheduling driver. */
   plugins: Omit<BenchPluginCandidate, 'patch'>[]
   /** Driver models: built-in DeepSeek, the source profile's OpenAI-compatible routes, and provider plugins. */
@@ -138,6 +148,8 @@ export interface BenchStartInput {
   webTools: boolean
   /** Whether runs see the user's global skills (`~/.agents/skills`); off gives each experiment an empty skills home. */
   globalSkills: boolean
+  /** Agent time limit of one trial in seconds, for a container benchmark. */
+  agentTimeoutSec?: number
 }
 
 /** One finished run as the progress view lists it. */
@@ -192,6 +204,7 @@ const startInput = z.strictObject({
   budgetUsd: z.number().positive().max(100),
   webTools: z.boolean(),
   globalSkills: z.boolean(),
+  agentTimeoutSec: z.number().int().min(600).max(43_200).optional(),
 })
 
 /**
@@ -330,8 +343,43 @@ export interface BenchRunDeps {
    * @param key - the DeepSeek key.
    */
   judge: (model: BenchDriverModel, key: string) => (request: JudgeRequest, signal?: AbortSignal) => Promise<JudgeReply>
+  /** Container benchmarks; absent leaves them not startable. */
+  harbor?: {
+    /** Probe Docker and Harbor. */
+    probe: () => Promise<HarborEnvironment>
+    /** The directory of one task, downloading it when needed. */
+    taskDir: (task: string, signal?: AbortSignal) => Promise<string>
+    /** Lists containers a job left behind, from the probed `docker`; defaults to `docker ps`. */
+    listContainers?: (docker: string) => ContainerLister
+  }
   /** Clock, for tests. */
   now?: () => Date
+}
+
+/** Agent time limit of a container trial when the form sets none. */
+export const DEFAULT_AGENT_TIMEOUT_SEC = 3600
+
+/**
+ * How the plugin under test is installed in a task container: the source
+ * profile's own dependency spec. A local tarball is uploaded; npm and git
+ * specs are installed there with network during setup.
+ * @param profileDir - the source profile directory.
+ * @param name - the plugin package name.
+ * @returns an absolute tarball path, a git or https spec, or `name@version`.
+ * @throws Error when the profile links the plugin from a directory, which a container cannot reach.
+ */
+export async function pluginInstallSpec(profileDir: string, name: string): Promise<string> {
+  const dependencies = (await readJson(join(profileDir, 'package.json')) as { dependencies?: Record<string, unknown> }).dependencies ?? {}
+  const spec = dependencies[name]
+  if (typeof spec !== 'string' || spec === '') throw new Error(`BENCH_PLUGIN_SPEC: ${name} has no dependency spec in the source profile`)
+  if (spec.startsWith('file:')) {
+    const path = spec.slice('file:'.length)
+    if (!isAbsolute(path) || !/\.(tgz|tar\.gz)$/.test(path)) throw new Error(`BENCH_PLUGIN_SPEC: ${name} is installed from ${spec}; only an absolute tarball can be copied into a task container`)
+    return path
+  }
+  if (/^(link|workspace|portal):/.test(spec)) throw new Error(`BENCH_PLUGIN_SPEC: ${name} is linked (${spec}) and cannot be installed in a task container`)
+  if (/^(github:|git\+|git:|https:)/.test(spec)) return spec
+  return `${name}@${spec}`
 }
 
 /**
@@ -339,8 +387,21 @@ export interface BenchRunDeps {
  * @param entry - the catalog row.
  * @returns the serializable item.
  */
-function catalogItem(entry: (typeof CATALOG)[number]): BenchCatalogItem {
-  const { status, ...rest } = entry
+function catalogItem(entry: (typeof CATALOG)[number], harbor: HarborEnvironment | undefined): BenchCatalogItem {
+  const { status, ...entryFields } = entry
+  const adaptation = ADAPTATIONS[entry.id]
+  const rest = { ...entryFields, protocol: protocolOf(entry), ...adaptation === undefined ? {} : { adaptation } }
+  if (status.kind === 'harbor') {
+    const missing = harbor === undefined ? ['docker', 'harbor'] as HarborMissing[] : harborMissing(harbor)
+    return {
+      ...rest,
+      status: missing.length === 0 ? 'runnable' : 'blocked',
+      ...missing.length === 0 ? {} : { reason: BLOCKERS.harbor },
+      metric: 'score',
+      judged: false,
+      container: { missing, harborVersion: HARBOR_VERSION },
+    }
+  }
   const adapter = status.kind === 'runnable' ? status.adapter : undefined
   return {
     ...rest,
@@ -449,6 +510,7 @@ export class BenchRunManager {
 
   /** What the run form offers. */
   async choices(): Promise<BenchRunChoices> {
+    const harbor = await this.deps.harbor?.probe()
     const candidates = await listPluginCandidates(this.deps.sourceProfile, this.deps.self)
     const plugins = candidates.map(({ patch: _patch, ...plugin }) => plugin)
     const models = await this.drivers(candidates)
@@ -456,7 +518,8 @@ export class BenchRunManager {
     for (const name of new Set([DEEPSEEK_KEY_ENV, ...models.flatMap(model => model.keyEnv === undefined ? [] : [model.keyEnv])])) keys[name] = await this.deps.credential(name) !== undefined
     return {
       categories: CATEGORY_IDS.map(id => ({ id, ...CATEGORIES[id] })),
-      catalog: CATALOG.map(catalogItem),
+      catalog: CATALOG.map(entry => catalogItem(entry, harbor)),
+      protocolNote: PROTOCOL_NOTE,
       plugins,
       models,
       judges: [...this.deps.models],
@@ -483,12 +546,22 @@ export class BenchRunManager {
     const form = startInput.parse(input)
     const entry = catalogEntry(form.benchmark)
     if (entry === undefined) throw new Error(`BENCH_BENCHMARK_UNKNOWN: ${form.benchmark}`)
-    if (entry.status.kind !== 'runnable' && entry.status.kind !== 'bundled') throw new Error(`BENCH_NOT_RUNNABLE: ${entry.name} cannot run here: ${BLOCKERS[entry.status.blocker].en}`)
+    if (entry.status.kind === 'blocked' || entry.status.kind === 'reference') throw new Error(`BENCH_NOT_RUNNABLE: ${entry.name} cannot run here: ${BLOCKERS[entry.status.blocker].en}`)
+    const container = entry.status.kind === 'harbor'
+    // The client's view of this machine may be stale, so the probe runs again.
+    const machine = container ? await this.deps.harbor?.probe() : undefined
+    if (container) {
+      const missing = machine === undefined ? ['docker', 'harbor'] : harborMissing(machine)
+      if (missing.length > 0) throw new Error(`BENCH_HARBOR_MISSING: ${entry.name} needs ${missing.join(', ')} on this computer: ${BLOCKERS.harbor.en}`)
+      if (form.driver.kind !== 'model') throw new Error('BENCH_HARBOR_DRIVER: a container benchmark runs one DeepSeek model; scheduling plugins are not supported there')
+      if (form.sample > RSI_EXAM_TASKS.length) throw new Error(`BENCH_DATASET_SHORT: ${entry.name} has ${String(RSI_EXAM_TASKS.length)} tasks in scope, fewer than the ${String(form.sample)} asked for`)
+    }
     const installed = await listPluginCandidates(this.deps.sourceProfile, this.deps.self)
     const candidates = new Map(installed.map(plugin => [plugin.name, plugin]))
     const model = (await this.drivers(installed)).find(option => option.provider === form.driver.provider && option.model === form.driver.model)
     if (model === undefined) throw new Error(`BENCH_DRIVER_UNKNOWN: ${form.driver.provider}/${form.driver.model} is not an available driver model`)
     if (model.blocked !== undefined) throw new Error(`BENCH_DRIVER_BLOCKED: ${model.label} cannot drive runs here: ${model.blocked.en}`)
+    if (container && model.source !== 'builtin') throw new Error(`BENCH_HARBOR_DRIVER: ${model.label} is not reachable from a task container, which can reach only ${DEEPSEEK_HOST}`)
     if (model.billing === 'unbilled' && form.unbilled !== true) throw new Error(`BENCH_UNBILLED_UNCONFIRMED: ${model.label} has no price; confirm it is not billed per token, or add a price row.`)
     if (model.billing === 'subscription' && form.subscriptionAccepted !== true) throw new Error(`BENCH_SUBSCRIPTION_UNCONFIRMED: ${model.label} spends subscription quota on every item; accept that first.`)
     const resolve = (name: string): BenchPluginCandidate => {
@@ -500,14 +573,14 @@ export class BenchRunManager {
     const schedulers = form.driver.kind === 'scheduler' ? form.driver.plugins.map(resolve) : []
     const overlap = plugins.find(plugin => schedulers.some(scheduler => scheduler.name === plugin.name))
     if (overlap !== undefined) throw new Error(`BENCH_PLUGIN_DUPLICATE: ${overlap.name} is both the scheduling driver and a compared plugin`)
-    if (!this.deps.runtime.canRun) throw new Error('BENCH_NO_LAUNCHER: the DeepSeek Harness command-line launcher was not found; set the plugin\'s launcher option to the app\'s runtime/cli/bin/dsh.')
+    if (!container && !this.deps.runtime.canRun) throw new Error('BENCH_NO_LAUNCHER: the DeepSeek Harness command-line launcher was not found; set the plugin\'s launcher option to the app\'s runtime/cli/bin/dsh.')
     const judged = entry.status.kind === 'runnable' && entry.status.adapter.judged
     const judgeModel = judged ? this.deps.models.find(option => option.model === (form.judge ?? this.deps.models[0]?.model)) : undefined
     if (judged && judgeModel === undefined) throw new Error(`BENCH_JUDGE_UNKNOWN: ${form.judge ?? '(none)'} is not a judge model`)
     // Resolve only the keys this experiment uses: the driver's, and DeepSeek's for a judge.
     const env: Record<string, string> = {}
     // The run profile's web search and fetch tools read the DeepSeek key too.
-    for (const name of new Set([...model.keyEnv === undefined ? [] : [model.keyEnv], ...judged || form.webTools ? [DEEPSEEK_KEY_ENV] : []])) {
+    for (const name of new Set([...model.keyEnv === undefined ? [] : [model.keyEnv], ...judged || form.webTools || container ? [DEEPSEEK_KEY_ENV] : []])) {
       const value = await this.deps.credential(name)
       if (value === undefined) throw new Error(name === DEEPSEEK_KEY_ENV ? 'BENCH_NO_CREDENTIAL: no DeepSeek API key is configured; set it on the Models settings page.' : `BENCH_NO_CREDENTIAL: no key is stored as ${name} for ${model.label}.`)
       env[name] = value
@@ -527,7 +600,7 @@ export class BenchRunManager {
     this.controller = controller
     this.job = { state: 'preparing', experimentId: id, benchmark: entry.id, total: form.sample * (1 + plugins.length) * form.repetitions, done: 0, spentUsd: 0, maxUsd: form.budgetUsd, running: [], runs: [], log: [], startedAt: Date.now() }
     // start() returns as soon as the form is accepted; sampling, setup and the runs follow in the background.
-    this.finished = this.prepareAndRun(form, entry, model, carrier, plugins, schedulers, judgeModel, env, key, secrets, id, controller).finally(() => {
+    this.finished = this.prepareAndRun(form, entry, model, carrier, plugins, schedulers, judgeModel, env, key, secrets, id, controller, machine).finally(() => {
       if (this.controller === controller) this.controller = undefined
     })
     return { experimentId: id }
@@ -546,12 +619,17 @@ export class BenchRunManager {
     secrets: readonly string[],
     id: string,
     controller: AbortController,
+    machine: HarborEnvironment | undefined,
   ): Promise<void> {
     const job = this.job
+    const container = entry.status.kind === 'harbor'
     try {
       let tasks: string[]
       let benchmark: Experiment['benchmark']
-      if (entry.status.kind === 'runnable') {
+      if (container) {
+        tasks = permutation(RSI_EXAM_TASKS.length, form.seed).slice(0, form.sample).map(index => RSI_EXAM_TASKS[index] as string)
+        benchmark = { id: entry.id, source: entry.source.label, revision: RSI_EXAM.revision, seed: form.seed, metric: 'score' }
+      } else if (entry.status.kind === 'runnable') {
         const { adapter } = entry.status
         this.append(`sampling ${String(form.sample)} items of ${entry.name}`)
         const sampled = await this.deps.datasets.sample(entry.id, adapter.source, { count: form.sample, seed: form.seed, ...adapter.usable === undefined ? {} : { usable: adapter.usable }, signal: controller.signal })
@@ -573,7 +651,8 @@ export class BenchRunManager {
         sharedPatches.push(join(shared, 'web-off.patch.yml'))
         await writeFile(sharedPatches[1] as string, WEB_OFF_PATCH)
       }
-      if (!form.globalSkills) {
+      // A task container has no global skills to leave out.
+      if (!form.globalSkills && !container) {
         const agentsHome = join(shared, 'agents-home')
         await mkdir(agentsHome, { recursive: true })
         const path = join(shared, 'skills-off.patch.yml')
@@ -606,20 +685,25 @@ export class BenchRunManager {
         tasks,
         variants: [
           { id: 'baseline', patches: [], env: {} },
-          ...plugins.map((plugin): Variant => ({ id: variantIdOf(plugin.name), patches: [plugin.patch], env: { SOLAR_BENCH_PLUGIN: `${plugin.name}@${plugin.version}` } })),
+          ...await Promise.all(plugins.map(async (plugin): Promise<Variant> => ({
+            id: variantIdOf(plugin.name),
+            patches: [plugin.patch],
+            env: { SOLAR_BENCH_PLUGIN: `${plugin.name}@${plugin.version}`, ...container ? { SOLAR_BENCH_PLUGIN_SPEC: await pluginInstallSpec(this.deps.sourceProfile, plugin.name) } : {} },
+          }))),
         ],
         benchmark,
         driver,
         shared: sharedPatches,
         budgetUsd: form.budgetUsd,
         webTools: form.webTools,
-        globalSkills: form.globalSkills,
+        globalSkills: container ? false : form.globalSkills,
+        ...container ? { harbor: { version: HARBOR_VERSION, agentTimeoutSec: form.agentTimeoutSec ?? DEFAULT_AGENT_TIMEOUT_SEC, allowHosts: [DEEPSEEK_HOST] } } : {},
         ...judgeModel === undefined ? {} : { judge: { provider: judgeModel.provider, model: judgeModel.model } },
         ...model.billing === 'tokens' ? {} : { unbilledModels: [model.model] },
         ...model.billing === 'subscription' ? { subscriptionAccepted: true as const } : {},
       }
       if (new Set(experiment.variants.map(variant => variant.id)).size !== experiment.variants.length) throw new Error('BENCH_PLUGIN_DUPLICATE: two plugins map to the same variant id')
-      await writeRunTemplate(this.deps.templateHome, this.deps.sourceProfile, [...new Set([...plugins, ...schedulers, ...carrier === undefined ? [] : [carrier]].map(plugin => plugin.name))])
+      if (!container) await writeRunTemplate(this.deps.templateHome, this.deps.sourceProfile, [...new Set([...plugins, ...schedulers, ...carrier === undefined ? [] : [carrier]].map(plugin => plugin.name))])
       Object.assign(this.job, {
         state: 'running',
         total: tasks.length * experiment.variants.length * form.repetitions,
@@ -628,7 +712,7 @@ export class BenchRunManager {
       })
       this.append(`experiment ${id}: ${String(this.job.total)} runs`)
       const judge = judgeModel === undefined || key === undefined ? undefined : this.deps.judge(judgeModel, key)
-      await this.execute(experiment, env, controller, judge)
+      await this.execute(experiment, env, controller, judge, machine)
     } catch (error) {
       // Sampling and setup run in the background too, so the page shows a failure here instead of waiting on start().
       job.state = controller.signal.aborted ? 'stopped' : 'failed'
@@ -660,7 +744,7 @@ export class BenchRunManager {
     if (this.job.log.length > LOG_LINES) this.job.log.splice(0, this.job.log.length - LOG_LINES)
   }
 
-  private async execute(experiment: Experiment, env: Readonly<Record<string, string>>, controller: AbortController, judge: ((request: JudgeRequest, signal?: AbortSignal) => Promise<JudgeReply>) | undefined): Promise<void> {
+  private async execute(experiment: Experiment, env: Readonly<Record<string, string>>, controller: AbortController, judge: ((request: JudgeRequest, signal?: AbortSignal) => Promise<JudgeReply>) | undefined, machine?: HarborEnvironment): Promise<void> {
     const job = this.job
     const label = (cell: CellKey) => `${cell.variant} · ${cell.task} #${String(cell.rep + 1)}`
     const onProgress = ({ record, done, total }: { record: RunRecord; done: number; total: number }): void => {
@@ -704,6 +788,13 @@ export class BenchRunManager {
         env,
         profileHome: this.deps.templateHome,
         ...judge === undefined ? {} : { judge },
+        ...machine?.harbor === undefined || this.deps.harbor === undefined ? {} : {
+          harbor: {
+            executable: machine.harbor,
+            taskDir: this.deps.harbor.taskDir,
+            ...machine.dockerPath === undefined ? {} : { listContainers: (this.deps.harbor.listContainers ?? dockerContainerLister)(machine.dockerPath), dockerDir: dirname(machine.dockerPath) },
+          },
+        },
       })
       job.state = 'finished'
     } catch (error) {

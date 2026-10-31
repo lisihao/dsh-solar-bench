@@ -56,7 +56,7 @@ export type Blocker = 'harbor' | 'expert-grading' | 'checkers' | 'docker' | 'gat
 
 /** Explanation of each blocker. */
 export const BLOCKERS: Readonly<Record<Blocker, Bilingual>> = {
-  'harbor': { zh: '每道题在 Harbor 框架管理的 Docker 容器里运行，让 DSH 作为 Harbor agent 的运行器尚未接入。', en: 'Each task runs in a Docker container managed by the Harbor framework; the runner that makes DSH a Harbor agent is not wired in yet.' },
+  'harbor': { zh: '每道题在 Harbor 框架管理的 Docker 容器里运行，需要本机运行中的 Docker 和 Harbor 0.25.0（uv tool install harbor==0.25.0）。', en: 'Each task runs in a Docker container managed by the Harbor framework; it needs a running Docker and Harbor 0.25.0 (uv tool install harbor==0.25.0) on this computer.' },
   'expert-grading': { zh: '交付物由行业专家评分，自动评分器未公开。', en: 'Deliverables are rated by industry experts; the automatic grader is not public.' },
   'checkers': { zh: '每条指令要用它自带的 Python 检查器验证，尚未接入。', en: 'Each instruction is verified by its own Python checkers; not yet wired in.' },
   'docker': { zh: '每道题要在独立的 Docker 环境里运行，本插件的一次性运行不提供。', en: 'Every task runs in its own Docker environment, which a one-shot run does not provide.' },
@@ -117,7 +117,7 @@ export interface CatalogEntry {
   /** Measurement caveat shown on the card. */
   caveat?: Bilingual
   /** Runnable here, the bundled suite, or why not. */
-  status: { kind: 'runnable'; adapter: BenchmarkAdapter } | { kind: 'bundled' } | { kind: 'blocked'; blocker: Blocker } | { kind: 'reference'; blocker: Blocker }
+  status: { kind: 'runnable'; adapter: BenchmarkAdapter } | { kind: 'bundled' } | { kind: 'harbor' } | { kind: 'blocked'; blocker: Blocker } | { kind: 'reference'; blocker: Blocker }
 }
 
 /** Final-answer instruction appended to every answer-graded prompt. */
@@ -377,7 +377,7 @@ const arxiv = (id: string) => ({ label: `arXiv:${id}`, url: `https://arxiv.org/a
 /** Every catalog row, grouped by category in display order. */
 export const CATALOG: readonly CatalogEntry[] = [
   // Agents & tool calling
-  { id: 'bfcl-simple', category: 'agent', tier: 'floor', name: 'BFCL v3 · simple', summary: { zh: '伯克利函数调用榜：给定函数定义，写出唯一正确的调用。按 BFCL 的 AST 规则比对函数名和参数。', en: 'Berkeley Function Calling Leaderboard: given function definitions, write the one correct call; graded by BFCL\'s AST rule.' }, source: hfLink('gorilla-llm/Berkeley-Function-Calling-Leaderboard'), paper: { label: 'Gorilla / BFCL', url: 'https://gorilla.cs.berkeley.edu/leaderboard.html' }, license: 'Apache-2.0', caveat: { zh: '模型以 JSON 文本写出调用，不经过 DSH 的原生工具通道。', en: 'The call is written as JSON text, not through DSH\'s native tool channel.' }, status: runnable('bfcl-simple') },
+  { id: 'bfcl-simple', category: 'agent', tier: 'floor', name: 'BFCL v3 · simple', summary: { zh: '伯克利函数调用榜：给定函数定义，写出唯一正确的调用。按 BFCL 的 AST 规则比对函数名和参数。', en: 'Berkeley Function Calling Leaderboard: given function definitions, write the one correct call; graded by BFCL\'s AST rule.' }, source: hfLink('gorilla-llm/Berkeley-Function-Calling-Leaderboard'), paper: { label: 'Gorilla / BFCL', url: 'https://gorilla.cs.berkeley.edu/leaderboard.html' }, license: 'Apache-2.0', status: runnable('bfcl-simple') },
   { id: 'tau2-bench', category: 'agent', tier: 'ceiling', name: 'τ²-bench', summary: { zh: '客服场景下与模拟用户多轮交互、调用业务工具并遵守规则。', en: 'Customer-service domains: talk to a simulated user, call business tools, follow policy.' }, source: gh('sierra-research/tau2-bench'), paper: arxiv('2506.07982'), license: 'MIT', status: { kind: 'blocked', blocker: 'multi-turn' } },
   { id: 'gaia', category: 'agent', tier: 'ceiling', name: 'GAIA', summary: { zh: '需要检索、浏览和工具组合的通用助理问题。', en: 'General-assistant questions that need search, browsing and tool use.' }, source: hfLink('gaia-benchmark/GAIA'), paper: arxiv('2311.12983'), license: 'gated', status: { kind: 'blocked', blocker: 'gated' } },
   { id: 'terminal-bench', category: 'agent', tier: 'ceiling', name: 'Terminal-Bench', summary: { zh: '在终端里完成真实的系统和开发任务。', en: 'Real system and development tasks in a terminal.' }, source: gh('harbor-framework/terminal-bench-1'), license: 'Apache-2.0', status: { kind: 'blocked', blocker: 'docker' } },
@@ -399,7 +399,7 @@ export const CATALOG: readonly CatalogEntry[] = [
   { id: 'hle', category: 'general', tier: 'ceiling', name: "Humanity's Last Exam", summary: { zh: '各领域专家出的前沿难题。', en: 'Frontier questions written by experts across fields.' }, source: hfLink('cais/hle'), paper: arxiv('2501.14249'), license: 'MIT (gated)', status: { kind: 'blocked', blocker: 'gated' } },
   // Math
   { id: 'gsm8k', category: 'math', tier: 'floor', name: 'GSM8K', summary: { zh: '小学数学应用题，多步算术推理。', en: 'Grade-school math word problems with multi-step arithmetic.' }, source: hfLink('openai/gsm8k'), paper: arxiv('2110.14168'), license: 'MIT', items: 1319, status: runnable('gsm8k') },
-  { id: 'math-500', category: 'math', tier: 'floor', name: 'MATH-500', summary: { zh: 'MATH 竞赛题的 500 题代表子集。', en: 'A representative 500-problem subset of the MATH competition set.' }, source: hfLink('HuggingFaceH4/MATH-500'), paper: arxiv('2103.03874'), license: 'MIT (source)', items: 500, caveat: { zh: '答案按规范化后的字符串或数值比较，比符号等价更严，少数正确答案会判错。', en: 'Answers are compared as normalized strings or numbers, stricter than symbolic equivalence; a few correct answers score as wrong.' }, status: runnable('math-500') },
+  { id: 'math-500', category: 'math', tier: 'floor', name: 'MATH-500', summary: { zh: 'MATH 竞赛题的 500 题代表子集。', en: 'A representative 500-problem subset of the MATH competition set.' }, source: hfLink('HuggingFaceH4/MATH-500'), paper: arxiv('2103.03874'), license: 'MIT (source)', items: 500, status: runnable('math-500') },
   { id: 'aime-2024', category: 'math', tier: 'floor', name: 'AIME 2024', summary: { zh: '美国数学邀请赛 2024 年 30 题，答案为 0–999 的整数。', en: 'The 30 problems of AIME 2024; integer answers 0–999.' }, source: hfLink('HuggingFaceH4/aime_2024'), license: 'not tagged', items: 30, status: runnable('aime-2024') },
   { id: 'aime-2025', category: 'math', tier: 'ceiling', name: 'AIME 2025', summary: { zh: '美国数学邀请赛 2025 年 I、II 两卷共 30 题。', en: 'The 30 problems of AIME 2025 I and II.' }, source: hfLink('opencompass/AIME2025'), license: 'MIT', items: 30, status: runnable('aime-2025') },
   // Multimodal & long context
@@ -409,7 +409,7 @@ export const CATALOG: readonly CatalogEntry[] = [
   { id: 'mathvista', category: 'long-context', tier: 'ceiling', name: 'MathVista', summary: { zh: '基于图表和图形的数学推理。', en: 'Mathematical reasoning over charts and figures.' }, source: hfLink('AI4Math/MathVista'), paper: arxiv('2310.02255'), license: 'CC-BY-SA-4.0', status: { kind: 'blocked', blocker: 'images' } },
   { id: 'ruler', category: 'long-context', tier: 'ceiling', name: 'RULER', summary: { zh: '按指定长度合成的大海捞针、多跳追踪等长上下文任务。', en: 'Synthetic needle, multi-hop tracing and aggregation tasks at chosen lengths.' }, source: gh('NVIDIA/RULER'), paper: arxiv('2404.06654'), license: 'Apache-2.0', status: { kind: 'blocked', blocker: 'generator' } },
   // Preference & arenas
-  { id: 'mt-bench', category: 'preference', tier: 'floor', name: 'MT-Bench · first turn', summary: { zh: '80 道写作、角色扮演、推理、编程等开放题，裁判模型按 1–10 分打分。', en: '80 open questions (writing, roleplay, reasoning, coding…), rated 1–10 by a judge model.' }, source: gh('lm-sys/FastChat'), paper: arxiv('2306.05685'), license: 'Apache-2.0', items: 80, caveat: { zh: '只评第一轮；用 MT-Bench 的 single-v1 / single-math-v1 裁判提示词，裁判费用计入预算。', en: 'First turn only, with MT-Bench\'s single-v1 / single-math-v1 judge prompts; judge cost counts toward the budget.' }, status: runnable('mt-bench') },
+  { id: 'mt-bench', category: 'preference', tier: 'floor', name: 'MT-Bench · first turn', summary: { zh: '80 道写作、角色扮演、推理、编程等开放题，裁判模型按 1–10 分打分。', en: '80 open questions (writing, roleplay, reasoning, coding…), rated 1–10 by a judge model.' }, source: gh('lm-sys/FastChat'), paper: arxiv('2306.05685'), license: 'Apache-2.0', items: 80, caveat: { zh: '用 MT-Bench 的 single-v1 / single-math-v1 裁判提示词，裁判费用计入预算。', en: 'Uses MT-Bench\'s single-v1 / single-math-v1 judge prompts; judge cost counts toward the budget.' }, status: runnable('mt-bench') },
   { id: 'lmarena', category: 'preference', tier: 'ceiling', name: 'LMArena (Chatbot Arena)', summary: { zh: '真人匿名两两投票得出的 Elo 排名。', en: 'Elo ratings from anonymous human pairwise votes.' }, source: { label: 'lmarena.ai', url: 'https://lmarena.ai' }, paper: arxiv('2403.04132'), license: '—', status: { kind: 'reference', blocker: 'human-votes' } },
   { id: 'arena-hard-auto', category: 'preference', tier: 'ceiling', name: 'Arena-Hard-Auto', summary: { zh: '从竞技场难题中挑出的 500 题，裁判与基准模型两两比较。', en: '500 hard arena prompts judged pairwise against a baseline model.' }, source: gh('lmarena/arena-hard-auto'), paper: arxiv('2406.11939'), license: 'Apache-2.0', status: { kind: 'blocked', blocker: 'pairwise' } },
   { id: 'alpacaeval-2', category: 'preference', tier: 'floor', name: 'AlpacaEval 2.0', summary: { zh: '与参考模型两两比较的胜率，含长度校正。', en: 'Length-controlled win rate against a reference model.' }, source: gh('tatsu-lab/alpaca_eval'), license: 'CC-BY-NC-4.0', status: { kind: 'blocked', blocker: 'pairwise' } },
@@ -421,10 +421,10 @@ export const CATALOG: readonly CatalogEntry[] = [
   { id: 'osworld', category: 'long-horizon', tier: 'ceiling', name: 'OSWorld', summary: { zh: '在真实操作系统桌面上完成开放任务。', en: 'Open-ended tasks on real operating-system desktops.' }, source: gh('xlang-ai/OSWorld'), paper: arxiv('2404.07972'), license: 'Apache-2.0', status: { kind: 'blocked', blocker: 'docker' } },
   { id: 'metr-horizon', category: 'long-horizon', tier: 'ceiling', name: 'METR time horizon', summary: { zh: '以人类完成时长衡量 AI 能独立完成多长的任务。', en: 'How long a task, in human time, an AI can complete on its own.' }, source: gh('METR/eval-analysis-public'), paper: arxiv('2503.14499'), license: 'not stated', status: { kind: 'blocked', blocker: 'not-public' } },
   // Recursive self-improvement
-  { id: 'rsi-exam', category: 'rsi', tier: 'ceiling', name: 'RSI-Exam', summary: { zh: '拿到一个弱方法，自己做实验改进，最后在从未见过的隐藏数据上重放评分。', en: 'Improve a weak method by experiment, then replay it on a sealed split.' }, source: hfLink('RSI-Exam/RSI-Exam'), license: 'MIT', caveat: { zh: '只纳入公开 35 题中只需 CPU 的 27 题（修订 66f5493），每题最长 12 小时。公开的最好成绩 0.464 是全部 88 题的均分，不能和只跑 CPU 题的分数直接比较。', en: 'Only the 27 CPU-only tasks of the 35 public ones are in scope (revision 66f5493), up to 12 hours each. The best published mean, 0.464, is over all 88 tasks and is not directly comparable to a CPU-only subset.' }, status: { kind: 'blocked', blocker: 'harbor' } },
+  { id: 'rsi-exam', category: 'rsi', tier: 'ceiling', name: 'RSI-Exam', summary: { zh: '拿到一个弱方法，自己做实验改进，最后在从未见过的隐藏数据上重放评分。', en: 'Improve a weak method by experiment, then replay it on a sealed split.' }, source: hfLink('RSI-Exam/RSI-Exam'), license: 'MIT', items: 21, caveat: { zh: '公开 35 题（修订 66f5493）中 25 题声明不用 GPU，其中 4 题要在任务内调用模型；只纳入其余 21 题，每题最长 12 小时。公开的最好成绩 0.464 是全部 88 题的均分，不能和这个子集的分数直接比较。', en: 'Of the 35 public tasks (revision 66f5493), 25 declare no GPU and 4 of those call a model from inside the task; only the other 21 are in scope, up to 12 hours each. The best published mean, 0.464, is over all 88 tasks and is not directly comparable to this subset.' }, status: { kind: 'harbor' } },
   // Science
   { id: 'lab-bench', category: 'science', tier: 'ceiling', name: 'LAB-Bench (LitQA2 · SeqQA · ProtocolQA)', summary: { zh: 'FutureHouse 的生物研究实务题：文献、序列分析和实验方案。', en: 'FutureHouse\'s practical biology research questions: literature, sequences and protocols.' }, source: hfLink('futurehouse/lab-bench'), paper: arxiv('2407.10362'), license: 'CC-BY-SA-4.0', items: 907, caveat: { zh: '联网工具默认关闭，LitQA2 测的是记忆而不是检索。', en: 'With web tools off, LitQA2 measures recall rather than retrieval.' }, status: runnable('lab-bench') },
-  { id: 'chembench', category: 'science', tier: 'ceiling', name: 'ChemBench · multiple choice', summary: { zh: '化学知识与推理，覆盖分析、有机、物化、毒理等方向。', en: 'Chemistry knowledge and reasoning across analytical, organic, physical, toxicology and more.' }, source: hfLink('jablonkagroup/ChemBench'), paper: arxiv('2404.01475'), license: 'MIT', caveat: { zh: '只取选择题；数值题按误差计分，尚未接入。', en: 'Multiple-choice items only; numeric items are scored by error and are not wired in.' }, status: runnable('chembench') },
+  { id: 'chembench', category: 'science', tier: 'ceiling', name: 'ChemBench · multiple choice', summary: { zh: '化学知识与推理，覆盖分析、有机、物化、毒理等方向。', en: 'Chemistry knowledge and reasoning across analytical, organic, physical, toxicology and more.' }, source: hfLink('jablonkagroup/ChemBench'), paper: arxiv('2404.01475'), license: 'MIT', status: runnable('chembench') },
   { id: 'scienceqa', category: 'science', tier: 'floor', name: 'ScienceQA · text only', summary: { zh: '中小学自然、社会、语言科学题，取无图题。', en: 'School natural, social and language science; items without images.' }, source: hfLink('derek-thomas/ScienceQA'), paper: arxiv('2209.09513'), license: 'CC-BY-SA-4.0', items: 4241, caveat: { zh: '题量为测试集全部题目，其中带图的题不会抽到。', en: 'The count is the whole test split; items with images are never sampled.' }, status: runnable('scienceqa') },
   { id: 'scicode', category: 'science', tier: 'ceiling', name: 'SciCode', summary: { zh: '科学家编写的科研计算编程题。', en: 'Research coding problems written by scientists.' }, source: hfLink('SciCode1/SciCode'), paper: arxiv('2407.13168'), license: 'Apache-2.0', status: { kind: 'blocked', blocker: 'large-data' } },
   // Harness comparison
@@ -441,6 +441,64 @@ export const CATALOG: readonly CatalogEntry[] = [
  */
 export function catalogEntry(id: string): CatalogEntry | undefined {
   return CATALOG.find(entry => entry.id === id)
+}
+
+/**
+ * How a catalog entry runs relative to the benchmark's own protocol:
+ * `faithful` keeps its items and scoring rule, `adapted` changes something
+ * (named in {@link ADAPTATIONS}), `diagnostic` is DSH's own task set.
+ */
+export type ProtocolKind = 'faithful' | 'adapted' | 'diagnostic'
+
+/** Every run goes through the DSH agent with this plugin's prompt, so no score is comparable with a public leaderboard. */
+export const PROTOCOL_NOTE: Bilingual = {
+  zh: '所有题目都经 DSH agent、按本插件的提示词（最后一行写 ANSWER）作答，成绩不能和公开榜单直接比较。',
+  en: 'Every item is answered by the DSH agent with this plugin\'s prompt (a final ANSWER line), so scores do not compare with public leaderboards.',
+}
+
+/** Where a runnable entry departs from the benchmark's own protocol, as checked against its source on 2026-10-31. */
+export const ADAPTATIONS: Readonly<Record<string, Bilingual>> = {
+  'bfcl-simple': { zh: '调用写成最终回答里的 JSON 文本，不经过 DSH 的原生工具通道。', en: 'The call is written as JSON in the final answer, not made through DSH\'s native tool channel.' },
+  'mmlu-pro': { zh: '答案取最后一行 ANSWER；官方评测用自己的提示词和答案抽取规则。', en: 'The answer is read from a final ANSWER line; the official evaluation uses its own prompt and extraction rule.' },
+  'math-500': { zh: '等价判断是规范化后比字符串或数值，比官方的符号等价严，会少算一些对的答案。', en: 'Equivalence is a normalized string or numeric match, stricter than the official symbolic check, so some right answers count as wrong.' },
+  'simpleqa': { zh: '裁判是所选的 DeepSeek 模型；simple-evals 在固定版本里用 gpt-4.1-2025-04-14 评分。', en: 'The judge is the chosen DeepSeek model; simple-evals grades with gpt-4.1-2025-04-14 at the pinned commit.' },
+  'mt-bench': { zh: '只跑第一轮；裁判是所选的 DeepSeek 模型，官方用 GPT-4。', en: 'First turn only; the judge is the chosen DeepSeek model, where the official setup uses GPT-4.' },
+  'longbench-v2': { zh: '长文写进工作区的文件，让 agent 自己去读，而不是直接放进提示词。', en: 'The long text is written to a workspace file for the agent to read, instead of being placed in the prompt.' },
+  'chembench': { zh: '只跑选择题；按误差评分的数值题没有接入。', en: 'Multiple-choice items only; numeric items scored by error are not run.' },
+  'scienceqa': { zh: '只跑不带图片的题。', en: 'Text-only items only.' },
+  'rsi-exam': { zh: '只纳入不用 GPU、也不在任务内调用模型的 21 题。', en: 'Only the 21 tasks that need no GPU and call no model inside the task.' },
+}
+
+/**
+ * The protocol kind of a catalog entry.
+ * @param entry - the entry.
+ * @returns faithful, adapted or diagnostic.
+ */
+export function protocolOf(entry: CatalogEntry): ProtocolKind {
+  if (entry.status.kind === 'bundled') return 'diagnostic'
+  return ADAPTATIONS[entry.id] === undefined ? 'faithful' : 'adapted'
+}
+
+/**
+ * What one experiment's result stands for: every item under the benchmark's
+ * own rule (`full`), a sample of them (`subset`), a sample of a set whose total
+ * is not verified (`sampled`), a changed protocol (`adapted`), or DSH's own
+ * tasks (`diagnostic`).
+ */
+export type ResultProtocol = 'full' | 'subset' | 'sampled' | 'adapted' | 'diagnostic'
+
+/**
+ * The protocol identity of an experiment's result.
+ * @param entry - its catalog entry, when the benchmark is still listed.
+ * @param tasks - items the experiment ran.
+ * @returns the identity.
+ */
+export function resultProtocol(entry: CatalogEntry | undefined, tasks: number): ResultProtocol {
+  if (entry === undefined) return 'sampled'
+  const kind = protocolOf(entry)
+  if (kind !== 'faithful') return kind
+  if (entry.items === undefined) return 'sampled'
+  return tasks >= entry.items ? 'full' : 'subset'
 }
 
 /**

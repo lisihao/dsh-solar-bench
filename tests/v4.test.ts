@@ -96,7 +96,7 @@ describe('run record schema', () => {
     await expect(read(ungraded)).rejects.toThrow(/runs\.jsonl:2: .*graded record carries grade and grader/s)
     await expect(read({ ...graded('plugin', 't1', true, 0.01), status: 'skipped' })).rejects.toThrow(/runs\.jsonl:2:/)
     await expect(read({ ...graded('plugin', 't1', true, 0.01), extra: 1 })).rejects.toThrow(/runs\.jsonl:2:/)
-    await expect(read({ ...graded('plugin', 't1', true, 0.01), formatVersion: 4 })).rejects.toThrow(/run record format 4 is not readable/)
+    await expect(read({ ...graded('plugin', 't1', true, 0.01), formatVersion: 5 })).rejects.toThrow(/run record format 5 is not readable/)
   })
 })
 

@@ -5,7 +5,7 @@
  */
 
 import { createElement as h, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement, type ReactNode } from 'react'
-import type { BenchTier, Bilingual, CategoryId } from './catalog.js'
+import type { BenchTier, Bilingual, CategoryId, ResultProtocol } from './catalog.js'
 import type { BenchExperimentDetail, BenchExperimentList, BenchLedgersApi } from './contracts.js'
 import { fill, NO_GLOBAL_SKILLS, type BenchT } from './format.js'
 import type { BenchInsights, PluginComparison, ScoreColumn } from './insights.js'
@@ -71,6 +71,15 @@ export const TIER_PILL: Readonly<Record<BenchTier, (key?: string) => ReactElemen
 
 /** Shown when the latest baseline of a pass-rate benchmark sits at 90% or more over at least 10 runs. */
 export const SATURATED_PILL = (key?: string): ReactElement => pill(tx('已饱和', 'Saturated'), C.warn, C.warnSoft, key)
+
+/** What an experiment's result stands for, in the score notes. */
+const PROTOCOL_TEXT: Readonly<Record<ResultProtocol, () => string>> = {
+  full: () => tx('全部题目、原评分规则', 'every item, the benchmark\'s own rule'),
+  subset: () => tx('原评分规则下的抽样子集', 'a sample under the benchmark\'s own rule'),
+  sampled: () => tx('抽样（总题数未核实）', 'a sample (total item count unverified)'),
+  adapted: () => tx('改编协议', 'adapted protocol'),
+  diagnostic: () => tx('DSH 自己的检查任务', 'DSH\'s own check tasks'),
+}
 
 const STATUS_PILL: Readonly<Record<BenchCatalogItem['status'], () => ReactElement>> = {
   runnable: () => pill(tx('可运行', 'Runnable'), C.good, C.goodSoft),
@@ -188,20 +197,22 @@ function Scoreboard({ insights, choices, names }: { readonly insights: BenchInsi
   ]))
 }
 
-function ScoreNotes({ insights, names }: { readonly insights: BenchInsights; readonly names: Names }): ReactElement {
+function ScoreNotes({ insights, choices, names }: { readonly insights: BenchInsights; readonly choices: BenchRunChoices; readonly names: Names }): ReactElement {
   const nameOf = (id: string) => insights.rows.find(row => row.benchmark === id)?.name ?? id
   return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: C.faint, lineHeight: 1.6 } }, [
+    h('p', { key: 'protocol-note', style: { margin: 0 } }, bi(choices.protocolNote)),
     h('p', { key: 'legend', style: { margin: 0 } }, tx(
       '每格取该基准在该配置下最近一次实验的结果（通过率 ×100，MT-Bench 为平均分 ×100）。加粗为本行最新一次实验里的最高值；带 † 的灰色格子来自更早的实验，样本不同，不能和同行直接比较。▲ / ▼ 表示与同一实验的基线配对比较，在 95% 置信区间上显著提升或下降。鼠标停在格子上可看运行次数和差值。',
       'Each cell is the latest experiment of that benchmark and composition (pass rate ×100; MT-Bench is mean score ×100). Bold is the best within the row\'s latest experiment; muted cells marked † come from earlier experiments with other samples and do not compare directly. ▲ / ▼ mark a significant gain or loss against the same experiment\'s baseline at 95% confidence. Hover a cell for runs and the difference.',
     )),
     ...insights.configs.map(config => h('p', { key: config.benchmark, style: { margin: 0 } }, fill(tx(
-      '{name}：{items} 题 × {reps} 次，驱动 {driver}，联网工具{web}，全局技能{skills}{judge}，{date}。',
-      '{name}: {items} items × {reps}, driver {driver}, web tools {web}, global skills {skills}{judge}, {date}.',
+      '{name}：{items} 题 × {reps} 次，{protocol}，驱动 {driver}，联网工具{web}，全局技能{skills}{judge}，{date}。',
+      '{name}: {items} items × {reps}, {protocol}, driver {driver}, web tools {web}, global skills {skills}{judge}, {date}.',
     ), {
       name: nameOf(config.benchmark),
       items: config.items,
       reps: config.repetitions,
+      protocol: PROTOCOL_TEXT[config.protocol](),
       // The skills setting has its own clause here, so the driver is named without it.
       driver: names.driver(config.driver.replace(NO_GLOBAL_SKILLS, '')),
       web: config.webTools === true ? tx('开', 'on') : config.webTools === false ? tx('关', 'off') : tx('未记录', 'not recorded'),
@@ -257,7 +268,7 @@ function Overview({ insights, choices, names, onOpen }: { readonly insights: Ben
     h('section', { key: 'board', style: { display: 'flex', flexDirection: 'column', gap: 10, minWidth: 0 } }, [
       h('h2', { key: 't', style: S.h2 }, tx('成绩单', 'Scoreboard')),
       h(Scoreboard, { key: 'table', insights, choices, names }),
-      h(ScoreNotes, { key: 'notes', insights, names }),
+      h(ScoreNotes, { key: 'notes', insights, choices, names }),
     ]),
     h('div', { key: 'questions', style: { ...S.grid, gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 380px), 1fr))' } }, [
       h(Question, {
@@ -330,7 +341,8 @@ function Overview({ insights, choices, names, onOpen }: { readonly insights: Ben
 /** Bring the run panel at the top of the page into view. */
 const showJobPanel = (): void => { document.querySelector('[data-bench-job]')?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }
 
-function RunForm({ item, choices, runs, onStarted, onCancel, job }: {
+/** The form that configures and starts one experiment. */
+export function RunForm({ item, choices, runs, onStarted, onCancel, job }: {
   readonly item: BenchCatalogItem
   readonly choices: BenchRunChoices
   readonly runs: BenchRunsApi
@@ -344,7 +356,9 @@ function RunForm({ item, choices, runs, onStarted, onCancel, job }: {
   const [sample, setSample] = useState(String(Math.min(item.items ?? 20, 20)))
   const [seed, setSeed] = useState('1')
   const optionKey = (entry: { provider: string; model: string }) => `${entry.provider}\u0000${entry.model}`
-  const usable = choices.models.filter(entry => entry.blocked === undefined)
+  // A container benchmark's agent can reach only the DeepSeek API, so only the built-in DeepSeek models can drive it.
+  const container = item.container !== undefined
+  const usable = choices.models.filter(entry => entry.blocked === undefined && (!container || entry.source === 'builtin'))
   const [driverChoice, setDriverChoice] = useState(usable[0] === undefined ? '' : optionKey(usable[0]))
   const driverModel = usable.find(entry => optionKey(entry) === driverChoice)
   const model = driverModel?.model ?? ''
@@ -361,6 +375,9 @@ function RunForm({ item, choices, runs, onStarted, onCancel, job }: {
   const [skills, setSkills] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | undefined>()
+  const [timeoutMinutes, setTimeoutMinutes] = useState('60')
+  const minutes = Number(timeoutMinutes)
+  const timeoutValid = !container || (Number.isInteger(minutes) && minutes >= 10 && minutes <= 720)
   const toggle = (list: string[], name: string) => list.includes(name) ? list.filter(entry => entry !== name) : [...list, name]
   const n = Number(sample)
   const variants = 1 + plugins.length
@@ -368,10 +385,10 @@ function RunForm({ item, choices, runs, onStarted, onCancel, job }: {
   const driverKey = scheduled || driverModel === undefined ? undefined : `${driverModel.provider}/${driverModel.model}`
   const history = driverKey === undefined ? undefined : choices.history.find(entry => entry.benchmark === item.id && entry.driver === driverKey && entry.globalSkills === skills)
   const budgetValue = Number(budget)
-  const keyEnvs = [...driverModel?.keyEnv === undefined ? [] : [driverModel.keyEnv], ...item.judged || web ? ['DEEPSEEK_API_KEY'] : []]
+  const keyEnvs = [...driverModel?.keyEnv === undefined ? [] : [driverModel.keyEnv], ...item.judged || web || container ? ['DEEPSEEK_API_KEY'] : []]
   const missingKeys = keyEnvs.filter(name => choices.keys[name] !== true)
   const confirmed = driverModel !== undefined && (driverModel.billing !== 'unbilled' || unbilled) && (driverModel.billing !== 'subscription' || accepted)
-  const valid = runCount > 0 && budget !== '' && budgetValue > 0 && budgetValue <= 100 && missingKeys.length === 0 && confirmed && (!scheduled || schedulers.length > 0)
+  const valid = runCount > 0 && budget !== '' && budgetValue > 0 && budgetValue <= 100 && missingKeys.length === 0 && confirmed && (!scheduled || schedulers.length > 0) && timeoutValid
   const start = async () => {
     setBusy(true)
     setError(undefined)
@@ -389,6 +406,7 @@ function RunForm({ item, choices, runs, onStarted, onCancel, job }: {
         budgetUsd: budgetValue,
         webTools: web,
         globalSkills: skills,
+        ...container ? { agentTimeoutSec: minutes * 60 } : {},
       })
       onStarted()
     } catch (cause) {
@@ -410,11 +428,12 @@ function RunForm({ item, choices, runs, onStarted, onCancel, job }: {
       h('label', { key: 'sample', style: S.label }, [tx('抽样题数', 'Items to sample'), h('input', { key: 'i', type: 'number', min: 1, max: Math.min(500, item.items ?? 500), value: sample, onChange: (event: { target: { value: string } }) => setSample(event.target.value), style: S.input })]),
       h('label', { key: 'seed', style: S.label }, [tx('随机种子', 'Seed'), h('input', { key: 'i', type: 'number', min: 0, value: seed, onChange: (event: { target: { value: string } }) => setSeed(event.target.value), style: S.input })]),
       h('label', { key: 'reps', style: S.label }, [tx('每题重复次数', 'Repetitions'), h('input', { key: 'i', type: 'number', min: 1, max: 10, value: reps, onChange: (event: { target: { value: string } }) => setReps(event.target.value), style: S.input })]),
+      container ? h('label', { key: 'timeout', style: S.label }, [tx('每题 agent 时限（分钟，10–720）', 'Agent time per item (minutes, 10–720)'), h('input', { key: 'i', type: 'number', min: 10, max: 720, value: timeoutMinutes, onChange: (event: { target: { value: string } }) => setTimeoutMinutes(event.target.value), style: { ...S.input, borderColor: timeoutValid ? C.line : C.warn } })]) : null,
       h('label', { key: 'budget', style: S.label }, [tx('预算上限（美元，必填）', 'Budget (USD, required)'), h('input', { key: 'i', type: 'number', min: 0.01, max: 100, step: 0.01, placeholder: '0.50', value: budget, onChange: (event: { target: { value: string } }) => setBudget(event.target.value), style: { ...S.input, borderColor: budget === '' ? C.warn : C.line } })]),
     ]),
     h('fieldset', { key: 'driver', style: { margin: 0, padding: 0, border: 'none', display: 'flex', flexDirection: 'column', gap: 8 } }, [
       h('legend', { key: 'l', style: { ...S.label, marginBottom: 6 } }, tx('驱动', 'Driver')),
-      h('div', { key: 'kind', style: { display: 'flex', gap: 6, flexWrap: 'wrap' } }, [
+      container ? null : h('div', { key: 'kind', style: { display: 'flex', gap: 6, flexWrap: 'wrap' } }, [
         h('button', { key: 'm', type: 'button', 'aria-pressed': !scheduled, style: { ...S.button, ...!scheduled ? { borderColor: C.brand, color: C.brand } : {} }, onClick: () => setScheduled(false) }, tx('指定模型', 'One model')),
         h('button', { key: 's', type: 'button', 'aria-pressed': scheduled, style: { ...S.button, ...scheduled ? { borderColor: C.brand, color: C.brand } : {} }, onClick: () => setScheduled(true) }, tx('智能调度', 'Smart scheduling')),
       ]),
@@ -441,7 +460,7 @@ function RunForm({ item, choices, runs, onStarted, onCancel, job }: {
       comparable.length === 0 ? h('p', { key: 'none', style: S.muted }, tx('桌面端没有启用第三方插件。', 'No third-party plugin is enabled in the desktop app.')) : h('div', { key: 'list', style: { display: 'grid', gap: 6, gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 220px), 1fr))' } }, comparable.map(plugin => check(plugin.name, `${title(plugin)} · ${plugin.version}`, plugins.includes(plugin.name), () => setPlugins(toggle(plugins, plugin.name))))),
     ]),
     check('web', tx('允许联网搜索和抓取（默认关闭：会让模型直接查到答案，且 11 月 1 日起按次计费，预算无法覆盖）。关闭的只是 DSH 的联网工具，命令行工具仍可能访问网络。', 'Allow web search and fetch (off by default: it lets the agent look answers up, and from Nov 1 it is billed per call outside the budget). This turns off DSH\'s web tools only; shell commands may still reach the network.'), web, () => setWeb(!web)),
-    check('skills', tx('带上本机的全局技能（~/.agents/skills）：模拟日常使用，比较「技能按需上下文」这类插件时需要。默认不带：技能目录会进每次请求，是主要花费；在 GSM8K 上用 flash 实测，带时每题约 $0.022，不带时约 $0.0003。不带时只去掉全局技能，内置技能和其他设置不变。', 'Include your global skills (~/.agents/skills): mirrors daily use, and is needed to compare plugins such as on-demand skill context. Off by default: the catalog goes into every request and is the main cost; measured on GSM8K with flash, about $0.022 per item with it and about $0.0003 without. Off leaves out the global skills only; bundled skills and other settings stay.'), skills, () => setSkills(!skills)),
+    container ? null : check('skills', tx('带上本机的全局技能（~/.agents/skills）：模拟日常使用，比较「技能按需上下文」这类插件时需要。默认不带：技能目录会进每次请求，是主要花费；在 GSM8K 上用 flash 实测，带时每题约 $0.022，不带时约 $0.0003。不带时只去掉全局技能，内置技能和其他设置不变。', 'Include your global skills (~/.agents/skills): mirrors daily use, and is needed to compare plugins such as on-demand skill context. Off by default: the catalog goes into every request and is the main cost; measured on GSM8K with flash, about $0.022 per item with it and about $0.0003 without. Off leaves out the global skills only; bundled skills and other settings stay.'), skills, () => setSkills(!skills)),
     !skills && plugins.includes('@lisihao/dsh-solar-skill-context') ? h('p', { key: 'skill-context', style: { ...S.muted, fontSize: 12, color: C.warn } }, tx('「技能按需上下文」要有全局技能才有东西可省；不带全局技能时，它和基线的对比说明不了它的效果。', 'On-demand skill context only has something to trim when global skills are present; without them its comparison with the baseline says little about it.')) : null,
     h('div', { key: 'plan', style: { display: 'flex', flexDirection: 'column', gap: 4, padding: 12, borderRadius: 10, background: C.hover, fontSize: 13 } }, [
       h('div', { key: 'runs' }, fill(tx('共 {runs} 次运行 = {n} 题 × {v} 组（基线 + {p} 个插件）× {r} 次', '{runs} runs = {n} items × {v} groups (baseline + {p} plugins) × {r}'), { runs: runCount, n: Number.isInteger(n) ? n : 0, v: variants, p: plugins.length, r: Math.max(1, Number(reps) || 1) })),
@@ -449,6 +468,7 @@ function RunForm({ item, choices, runs, onStarted, onCancel, job }: {
         ? tx('这个基准在该驱动和全局技能设置下还没有历史花费，无法预估。', 'No recorded spend for this benchmark, driver and global-skills setting, so no estimate.')
         : fill(tx('按 {k} 次历史运行，预计约 {e}（每次约 {m}）。', 'About {e} by {k} recorded runs (about {m} each).'), { k: history.runs, e: usd(history.meanUsd * runCount), m: usd(history.meanUsd) })),
       h('div', { key: 'stop', style: { color: C.muted } }, tx('每完成一次运行检查一次花费：已超预算，或按本次已跑的平均花费估计下一次会超，就停止；单次运行本身可能让总花费略超预算。', 'Spend is checked after every run: the job stops once over budget, or when the next run would likely cross it at this job\'s mean cost so far; a single run can still push spend slightly past the budget.')),
+      container ? h('div', { key: 'container', style: { color: C.warn } }, fill(tx('每道题在 Docker 容器里由 Harbor 运行，agent 最长 {m} 分钟，之后还有构建和评分。预算只在两道题之间检查，一道题跑到一半不会因超支停下。容器在安装阶段联网下载 Node 和 DSH，agent 运行时只能访问 api.deepseek.com。', 'Each item runs in a Docker container under Harbor, with up to {m} minutes for the agent plus build and grading. The budget is checked only between items; an item in progress is not stopped for spend. The container downloads Node and DSH during setup; while the agent runs it can reach only api.deepseek.com.'), { m: Number.isFinite(minutes) ? minutes : 0 })) : null,
       item.judged ? h('div', { key: 'judge', style: { color: C.muted } }, tx('这个基准需要裁判模型打分，裁判单独选择，费用计入预算。', 'This benchmark is judged by a separately chosen model; judge cost counts toward the budget.')) : null,
       driverModel?.billing === 'subscription' ? h('div', { key: 'quota', style: { color: C.warn } }, tx('订阅型模型不按 token 计费，预算只约束裁判等按 token 计费的部分。', 'A subscription model is not billed per token; the budget only limits token-billed parts such as the judge.')) : null,
       runCount > 0 && runCount / variants < choices.minTasks && plugins.length > 0 ? h('div', { key: 'few', style: { color: C.warn } }, fill(tx('少于 {m} 题时，对比结论会是「样本太少」。', 'With fewer than {m} items the comparison will read "too few items".'), { m: choices.minTasks })) : null,
@@ -477,7 +497,9 @@ export function BenchmarkCard({ item, latest, saturated, onRun, active }: { read
     h('div', { key: 'tier', style: { display: 'flex', flexWrap: 'wrap', gap: 6 } }, [TIER_PILL[item.tier]('t'), saturated ? SATURATED_PILL('s') : null]),
     h('p', { key: 's', style: { ...S.muted, color: C.text } }, bi(item.summary)),
     item.caveat === undefined ? null : h('p', { key: 'c', style: { ...S.muted, fontSize: 12 } }, bi(item.caveat)),
+    h('p', { key: 'protocol', style: { ...S.muted, fontSize: 12 } }, item.protocol === 'adapted' && item.adaptation !== undefined ? fill(tx('协议：已改编。{what}', 'Protocol: adapted. {what}'), { what: bi(item.adaptation) }) : item.protocol === 'diagnostic' ? tx('协议：DSH 自己的检查任务，不是公开基准。', 'Protocol: DSH\'s own check tasks, not a public benchmark.') : tx('协议：沿用原基准的题目和评分规则。', 'Protocol: the benchmark\'s own items and scoring rule.')),
     item.reason === undefined ? null : h('p', { key: 'r', style: { ...S.muted, fontSize: 12, color: C.warn } }, bi(item.reason)),
+    item.container === undefined || item.container.missing.length === 0 ? null : h('p', { key: 'missing', style: { ...S.muted, fontSize: 12, color: C.warn } }, `${tx('本机还缺：', 'This computer still needs: ')}${item.container.missing.map(entry => entry === 'docker' ? tx('运行中的 Docker', 'a running Docker') : entry === 'harbor' ? `Harbor ${item.container?.harborVersion ?? ''}` : fill(tx('Harbor {v}（已装的版本不同）', 'Harbor {v} (a different version is installed)'), { v: item.container?.harborVersion ?? '' })).join(tx('、', ', '))}`),
     h('div', { key: 'meta', style: { display: 'flex', flexWrap: 'wrap', gap: '4px 12px', fontSize: 12, color: C.faint } }, [
       h('a', { key: 'src', href: item.source.url, target: '_blank', rel: 'noreferrer', style: S.link }, item.source.label),
       item.paper === undefined ? null : h('a', { key: 'paper', href: item.paper.url, target: '_blank', rel: 'noreferrer', style: S.link }, item.paper.label),

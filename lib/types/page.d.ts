@@ -21,6 +21,15 @@ export interface BenchRunsApi {
 export declare const TIER_PILL: Readonly<Record<BenchTier, (key?: string) => ReactElement>>;
 /** Shown when the latest baseline of a pass-rate benchmark sits at 90% or more over at least 10 runs. */
 export declare const SATURATED_PILL: (key?: string) => ReactElement;
+/** The form that configures and starts one experiment. */
+export declare function RunForm({ item, choices, runs, onStarted, onCancel, job }: {
+    readonly item: BenchCatalogItem;
+    readonly choices: BenchRunChoices;
+    readonly runs: BenchRunsApi;
+    readonly onStarted: () => void;
+    readonly onCancel: () => void;
+    readonly job: BenchJobStatus | undefined;
+}): ReactElement;
 /** One catalog card. */
 export declare function BenchmarkCard({ item, latest, saturated, onRun, active }: {
     readonly item: BenchCatalogItem;

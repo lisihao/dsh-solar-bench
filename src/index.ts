@@ -18,8 +18,11 @@ import z from '@deepseek-ai/schemastery'
 import { answerGraders } from './answer-graders.js'
 import { APP_DSH_LAUNCHER, APP_PYTHON, appBundle } from './app.js'
 import { datasetSuites } from './catalog.js'
+import type {} from '@deepseek-ai/dsh-tools'
 import { BenchLedgersControl, BenchRunsControl, createLedgersApi } from './control.js'
+import { createBenchTools } from './tools.js'
 import { DatasetStore } from './datasets.js'
+import { HARBOR_GRADER, harborSuite, probeHarbor, RSI_EXAM, RSI_EXAM_TASKS, rsiExamTask } from './harbor.js'
 import { createJudge } from './judge.js'
 import { DEFAULT_PROVIDER_PLUGINS } from './providers.js'
 import type { ProviderPlugin } from './providers.js'
@@ -45,12 +48,15 @@ export { BenchRegistry } from './registry.js'
 export { AnalysisConfig, BenchRuntime, PROVIDER_FAILURE_CODES, RUN_TEMPLATE_FILES } from './runtime.js'
 export type { Config as RuntimeConfig } from './runtime.js'
 export { BenchLedgersControl, BenchRunsControl, createLedgersApi } from './control.js'
+export { createBenchTools, MAX_REPLY_CHARS, TOOL_NAMES } from './tools.js'
 export { BenchRunManager, costHistory, driverPatch, listPluginCandidates, RUN_PROFILE, runCost, skillsOffPatch, variantIdOf, WEB_OFF_PATCH, writeRunTemplate } from './runs.js'
 export type * from './runs.js'
 export { DSH_NATIVE_SUITE_DIR } from './suite.js'
 export { APP_DSH_LAUNCHER, APP_PYTHON, appBundle } from './app.js'
 export { CATALOG, CATEGORIES, CATEGORY_IDS, catalogEntry, datasetSuites } from './catalog.js'
 export { DatasetStore, permutation } from './datasets.js'
+export { classifyTrial, harborArgv, harborEnv, harborMissing, HARBOR_GRADER, HARBOR_PASS_REWARD, HARBOR_VERSION, harborSuite, probeHarbor, readHarborTrial, RSI_EXAM, RSI_EXAM_TASKS, rsiExamTask, runHarbor } from './harbor.js'
+export type * from './harbor.js'
 export { answerGraders } from './answer-graders.js'
 export { buildInsights } from './insights.js'
 export { DEFAULT_PROVIDER_PLUGINS, piAiOptions, piAiPatch, piAiRoutes, pluginRows, readProfilePatch, rowsPatch } from './providers.js'
@@ -150,6 +156,9 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   const datasets = new DatasetStore(join(benchDataDir(home), 'datasets'), (url, init) => fetch(url, init))
   for (const suite of datasetSuites(datasets)) registry.registerSuite(suite)
   for (const grader of answerGraders(python)) registry.registerGrader(grader)
+  registry.registerSuite(harborSuite('rsi-exam', RSI_EXAM_TASKS, `rsi-exam@${RSI_EXAM.revision.slice(0, 7)}`))
+  registry.registerGrader(HARBOR_GRADER)
+  const harborDatasets = join(benchDataDir(home), 'harbor', 'datasets')
   const runtime = new BenchRuntime(ctx, {
     command: launcher,
     templateHome: home,
@@ -160,7 +169,12 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     prices: config.prices,
     providerFailureCodes: [...PROVIDER_FAILURE_CODES],
   })
-  new BenchLedgersControl(ctx, createLedgersApi(runtime, config.analysis))
+  const ledgersApi = createLedgersApi(runtime, config.analysis)
+  new BenchLedgersControl(ctx, ledgersApi)
+  // Read-only analysis tools for an agent, only where a tool registry exists; bench still activates without one.
+  ctx.inject(['tools'], (scope) => {
+    for (const tool of createBenchTools(ledgersApi)) scope.effect(() => scope.tools.register(tool), `solar-bench: tool ${tool.name}`)
+  })
   const runs = new BenchRunManager({
     registry,
     runtime,
@@ -182,6 +196,10 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       ...blocked?.zh && blocked.en ? { blocked } : {},
     })),
     // The host's live provider registry advertises each plugin provider's models.
+    harbor: {
+      probe: () => probeHarbor(),
+      taskDir: (task, signal) => rsiExamTask(harborDatasets, task, (url, init) => fetch(url, init), signal),
+    },
     providerModels: async (provider) => {
       const llm = ctx.get('llm') as { listModels?: (id: string) => Promise<{ id: string; name?: string }[]> } | undefined
       return llm?.listModels === undefined ? [] : (await llm.listModels(provider)).map(model => ({ id: model.id, ...model.name === undefined ? {} : { name: model.name } }))

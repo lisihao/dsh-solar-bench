@@ -20,18 +20,22 @@ export const LEDGER_FORMAT_VERSION_2 = 2
 /** Format version of an experiment that records whether runs saw the user's global skills, and of its run records. */
 export const LEDGER_FORMAT_VERSION_3 = 3
 
-const READABLE_VERSIONS: readonly unknown[] = [LEDGER_FORMAT_VERSION, LEDGER_FORMAT_VERSION_2, LEDGER_FORMAT_VERSION_3]
+/** Format version of an experiment run through Harbor (a container benchmark), and of its run records. */
+export const LEDGER_FORMAT_VERSION_4 = 4
 
-const formatVersion = z.union([z.literal(LEDGER_FORMAT_VERSION), z.literal(LEDGER_FORMAT_VERSION_2), z.literal(LEDGER_FORMAT_VERSION_3)])
+const READABLE_VERSIONS: readonly unknown[] = [LEDGER_FORMAT_VERSION, LEDGER_FORMAT_VERSION_2, LEDGER_FORMAT_VERSION_3, LEDGER_FORMAT_VERSION_4]
+
+const formatVersion = z.union([z.literal(LEDGER_FORMAT_VERSION), z.literal(LEDGER_FORMAT_VERSION_2), z.literal(LEDGER_FORMAT_VERSION_3), z.literal(LEDGER_FORMAT_VERSION_4)])
 
 /**
  * The format version an experiment is written with: the oldest that holds its
  * fields, so a resumed ledger still matches its pinned file and an older build
  * refuses only what it cannot read.
  * @param experiment - the definition.
- * @returns 1, 2 or 3.
+ * @returns 1, 2, 3 or 4.
  */
-export function experimentFormatVersion(experiment: Experiment): 1 | 2 | 3 {
+export function experimentFormatVersion(experiment: Experiment): 1 | 2 | 3 | 4 {
+  if (experiment.harbor !== undefined) return LEDGER_FORMAT_VERSION_4
   if (experiment.globalSkills !== undefined) return LEDGER_FORMAT_VERSION_3
   const v2 = experiment.benchmark !== undefined || experiment.driver !== undefined || experiment.shared !== undefined
     || experiment.budgetUsd !== undefined || experiment.webTools !== undefined || experiment.judge !== undefined
@@ -68,6 +72,11 @@ const pinnedFile = z.object({
   unbilledModels: z.array(z.string().min(1)).optional(),
   subscriptionAccepted: z.literal(true).optional(),
   globalSkills: z.boolean().optional(),
+  harbor: z.object({
+    version: z.string().min(1),
+    agentTimeoutSec: z.number().int().positive(),
+    allowHosts: z.array(z.string().min(1)),
+  }).strict().optional(),
 }).strict().refine(file => experimentFormatVersion(file as unknown as Experiment) <= file.formatVersion, 'the definition carries fields newer than its format version')
 
 const toolStats = z.object({ calls: z.number().int().nonnegative(), errors: z.number().int().nonnegative(), totalMs: z.number().nonnegative() }).strict()
@@ -193,7 +202,7 @@ export class ExperimentLedger {
         throw new Error(`${join(this.dir, RUNS_FILE)}:${String(index + 1)}: corrupt run record`, { cause: error })
       }
       if (!READABLE_VERSIONS.includes(record.formatVersion)) {
-        throw new Error(`BENCH_RECORD_FORMAT: ${join(this.dir, RUNS_FILE)}:${String(index + 1)}: run record format ${String(record.formatVersion)} is not readable by this build (expects 1, 2 or 3)`)
+        throw new Error(`BENCH_RECORD_FORMAT: ${join(this.dir, RUNS_FILE)}:${String(index + 1)}: run record format ${String(record.formatVersion)} is not readable by this build (expects 1, 2, 3 or 4)`)
       }
       const parsed = runRecordLine.safeParse(record)
       if (!parsed.success) throw new Error(`${join(this.dir, RUNS_FILE)}:${String(index + 1)}: ${z.prettifyError(parsed.error)}`)
@@ -235,7 +244,7 @@ export async function readPinnedExperiment(root: string, id: string): Promise<Ex
   }
   const version = (json as { formatVersion?: unknown } | null)?.formatVersion
   if (!READABLE_VERSIONS.includes(version)) {
-    throw new Error(`BENCH_EXPERIMENT_FORMAT: ${file}: ledger format ${String(version)} is not readable by this build (expects 1, 2 or 3)`)
+    throw new Error(`BENCH_EXPERIMENT_FORMAT: ${file}: ledger format ${String(version)} is not readable by this build (expects 1, 2, 3 or 4)`)
   }
   const parsed = pinnedFile.safeParse(json)
   if (!parsed.success) throw new Error(`${file}: ${z.prettifyError(parsed.error)}`)

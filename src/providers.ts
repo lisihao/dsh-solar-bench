@@ -60,8 +60,8 @@ export interface ProviderPlugin {
 }
 
 const CODEX_BLOCKED: Bilingual = {
-  zh: '它的 OAuth 凭据在 DSH 凭据库里，运行中会被刷新；复制进跑分环境可能让桌面端的登录失效，直接共用凭据库又会让每次运行都能读写全部已存密钥。等昊哥决定后再开放。',
-  en: 'Its OAuth credential lives in the DSH credential store and is refreshed while it runs; copying it into run homes can invalidate the desktop login, and sharing the store gives every run read/write access to every stored key. Not enabled until 昊哥 decides.',
+  zh: '它的 OAuth 凭据在 DSH 凭据库里，运行中会被刷新；复制进跑分环境可能让桌面端的登录失效，直接共用凭据库又会让每次运行都能读写全部已存密钥。等维护者决定后再开放。',
+  en: 'Its OAuth credential lives in the DSH credential store and is refreshed while it runs; copying it into run homes can invalidate the desktop login, and sharing the store gives every run read/write access to every stored key. Not enabled until the maintainer decides.',
 }
 
 /** Provider plugins known on 2026-10-29 (route ids read from each installed package's `lib`). */

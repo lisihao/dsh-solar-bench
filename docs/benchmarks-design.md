@@ -1,6 +1,6 @@
 # Solar Benchmarks v2 design
 
-Status: implemented in `incubator/bench` on branch `claude/bench-v2` (unreleased); design for `incubator/bench` (`@lisihao/dsh-solar-bench`), written 2026-10-28 after 昊哥 asked for:
+Status: implemented in `incubator/bench` on branch `claude/bench-v2` (unreleased); design for `incubator/bench` (`@lisihao/dsh-solar-bench`), written 2026-10-28 after the maintainer asked for:
 
 1. results shown in the conversation's View tab bar (the row of tabs a started Session shows, next to Chat and Trajectory), not in the right sidebar;
 2. benchmarks grouped into categories, one tab per category, using recognized public benchmarks only; every run takes a user budget; the run can be driven by a chosen DSH model or by smart scheduling;
@@ -105,7 +105,7 @@ Licenses and gating below were read from the Hugging Face dataset API and the Gi
 | OSWorld | `xlang-ai/OSWorld` | Apache-2.0 | Not runnable here: desktop virtual machines. |
 | METR time horizons | `METR/eval-analysis-public` | not tagged | Not runnable here: the task suite is not public. |
 
-The category has no runnable benchmark in v2. The entries added on 2026-10-28 after 昊哥's reference score table (IFEval, IFBench, ZebraLogic, AA-LCR, SWE-bench Pro, GDPval) were checked the same way; τ³-bench was not found as a public source and is not listed. The page lists these with their reasons and points to the Harness comparison tab, whose bundled repository tasks are multi-step but are not a public benchmark.
+The category has no runnable benchmark in v2. The entries added on 2026-10-28 after the maintainer's reference score table (IFEval, IFBench, ZebraLogic, AA-LCR, SWE-bench Pro, GDPval) were checked the same way; τ³-bench was not found as a public source and is not listed. The page lists these with their reasons and points to the Harness comparison tab, whose bundled repository tasks are multi-step but are not a public benchmark.
 
 ### AI for Science
 
@@ -135,7 +135,7 @@ The form, per benchmark card:
 - **Sample**: number of items and a seed; the sample is drawn once and pinned.
 - **Driver**: a DeepSeek model, a local OpenAI-compatible route of the source profile (unbilled after confirmation), a subscription provider plugin such as ChatGPT Web (after accepting the quota use), or smart scheduling. The judge is chosen separately among the DeepSeek models.
   - A model driver writes a patch that sets `agent-default-model` to `{ provider, model }`. v2 offers the `deepseek-official` models from the `drivers` config (`deepseek-flash`, `deepseek-v4-pro` by default), because the run profile carries only `dsh-base` and `dsh-headless` and the key path is the DeepSeek key.
-  - Smart scheduling loads the selected installed scheduling plugins (for example native-collaboration and native-resident) into every variant, baseline included, on top of the default model. Which plugins count as "smart scheduling" is 昊哥's decision (open question 1). Observed 2026-10-28: native-resident 0.1.0-dev.0 does not activate in a run home, because its daemon socket path under `$DSH_HOME` exceeds the 104-byte macOS limit; native-collaboration does.
+  - Smart scheduling loads the selected installed scheduling plugins (for example native-collaboration and native-resident) into every variant, baseline included, on top of the default model. Which plugins count as "smart scheduling" is the maintainer's decision (open question 1). Observed 2026-10-28: native-resident 0.1.0-dev.0 does not activate in a run home, because its daemon socket path under `$DSH_HOME` exceeds the 104-byte macOS limit; native-collaboration does.
 - **Global skills**: on by default, matching daily use; unchecked, a shared patch points `skill-filesystem`'s `agentsHome` at an empty directory so `~/.agents/skills` stays out of every request. Recorded as `globalSkills` (format 3) and part of the scoreboard column and cost-history keys. On GSM8K the catalog was most of a flash run's ~78k input tokens; a stub-model probe measured the first request at 410,783 bytes with it and 23,951 without, and a paid 10-item flash run without it cost $0.00028 per item, against about $0.022 with it.
 - **Compare**: the baseline (no third-party plugin) and any installed plugins, each a variant.
 - **Repetitions**.
@@ -191,8 +191,8 @@ The Overview tab reads every ledger and answers four questions, each with the ev
 
 Recursive improvement inside one experiment cannot be measured in v2: every run gets a fresh home and state, so a memory or learning plugin starts empty each time. An ordered shared-state mode (state carried across a variant's runs, baseline in the same order, success plotted against run index) is the follow-up that would measure it; the UI states this limit.
 
-## 7. Open questions for 昊哥
+## 7. Open questions
 
 1. **Smart scheduling**: which installed plugins make up the "智能调度" driver? Proposed default: native-collaboration alone until native-resident's socket path is fixed.
-2. **Codex and Grok as drivers**: their OAuth credentials live in the DSH credential store and are refreshed while they run. Option A, copy the credential record into each run home: one refresh inside a run can invalidate the desktop login. Option B, let runs use the real credential store: every run can read and write every stored key, and concurrent refreshes race. Neither is enabled; both are listed with this reason until 昊哥 chooses.
+2. **Codex and Grok as drivers**: their OAuth credentials live in the DSH credential store and are refreshed while they run. Option A, copy the credential record into each run home: one refresh inside a run can invalidate the desktop login. Option B, let runs use the real credential store: every run can read and write every stored key, and concurrent refreshes race. Neither is enabled; both are listed with this reason until the maintainer chooses.
 3. **Paid acceptance run**: a real run in the installed app spends money. Proposed: GSM8K, 10 items on the flash driver plus 2 items on v4-pro (to observe the model id rc.2 logs for v4-pro), baseline only, budget about $0.20.

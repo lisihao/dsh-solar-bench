@@ -289,10 +289,24 @@ export interface JudgeUsage {
   costUsd?: number
 }
 
+/**
+ * What one run's sessions show of the plugins loaded into it: the raw
+ * observations behind "was the compared plugin exercised", decided later by
+ * comparing a plugin's runs with the same experiment's baseline.
+ */
+export interface RunSurface {
+  /** Tool names offered to the model in any request of the root session, sorted. */
+  tools: readonly string[]
+  /** SHA-256 (hex) of the root session's system prompts in log order. */
+  system: string
+  /** Counts of `hook/invoked`, `model/selection`, `compaction/start` and `developer/message` events across all sessions; absent kinds are omitted. */
+  events: Readonly<Record<string, number>>
+}
+
 /** One ledger line: everything needed to analyze and reproduce one run. */
 export interface RunRecord {
-  /** Record format version: 1, or 2 when it may carry `judge` and `answer`. */
-  formatVersion: 1 | 2 | 3 | 4
+  /** Record format version: 1, or 2 when it may carry `judge` and `answer`; 5 when it carries `surface`. */
+  formatVersion: 1 | 2 | 3 | 4 | 5
   /** Run coordinates. */
   cell: CellKey
   /** Terminal state. */
@@ -319,6 +333,8 @@ export interface RunRecord {
   judge?: JudgeUsage
   /** The parsed final answer, truncated, for inspection. */
   answer?: string
+  /** What the sessions show of the loaded plugins; present from format 5 whenever a session log was read. */
+  surface?: RunSurface
 }
 
 /** Progress notification for one finished run. */

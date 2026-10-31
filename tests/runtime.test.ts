@@ -86,7 +86,7 @@ describe('BenchRuntime.run', () => {
     expect(byTask('t1').every(record => record.status === 'graded' && record.grade?.pass === true)).toBe(true)
     expect(byTask('t2').every(record => record.status === 'graded' && record.grade?.pass === false)).toBe(true)
     const first = records[0]!
-    expect(first).toMatchObject({ formatVersion: 1, exitCode: 0, suiteVersion: '7', models: ['deepseek-v4-flash'], grader: { kind: 'file-contains', version: 1 } })
+    expect(first).toMatchObject({ formatVersion: 5, surface: { system: expect.stringMatching(/^[0-9a-f]{64}$/) }, exitCode: 0, suiteVersion: '7', models: ['deepseek-v4-flash'], grader: { kind: 'file-contains', version: 1 } })
     expect(first.metrics).toMatchObject({
       turns: 1, steps: 1, sessions: 2,
       tokens: { input: 1100, output: 210, cacheRead: 500, unreportedMessages: 0 },

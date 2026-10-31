@@ -1,14 +1,15 @@
 /**
- * The Benchmarks View of a conversation: an Overview tab (scoreboard and the
- * four plugin questions) and one tab per benchmark category, where a card
- * starts an experiment with a sample, a driver, plugins to compare and a budget.
+ * The Benchmarks View of a conversation, in four tabs: 基准库 (category tabs of
+ * cards, where a card starts an experiment with a sample, a driver, plugins to
+ * compare and a budget), 运行记录 (every experiment), 对照分析 (the scoreboard,
+ * comparisons, cost and speed) and 诊断与改进 (plugin health and the trend).
  */
 
 import { createElement as h, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement, type ReactNode } from 'react'
 import type { BenchTier, Bilingual, CategoryId, ResultProtocol } from './catalog.js'
 import type { BenchExperimentDetail, BenchExperimentList, BenchLedgersApi } from './contracts.js'
 import { fill, NO_GLOBAL_SKILLS, type BenchT } from './format.js'
-import type { BenchInsights, PluginComparison, ScoreColumn } from './insights.js'
+import type { BenchInsights, ExposureSignal, PluginComparison, PluginExposure, ScoreColumn } from './insights.js'
 import { currentLanguage } from './locales.js'
 import type { BenchCatalogItem, BenchJobStatus, BenchRunChoices, BenchStartInput } from './runs.js'
 import type { Verdict } from './types.js'
@@ -101,6 +102,24 @@ const verdictPill = (verdict: Verdict, key?: string): ReactElement => {
   const v = VERDICT[verdict]
   return pill(tx(v.zh, v.en), v.color, v.bg, key)
 }
+
+const SIGNAL_TEXT: Readonly<Record<ExposureSignal, () => string>> = {
+  tools: () => tx('调用了它自带的工具', 'its own tools were called'),
+  prompt: () => tx('系统提示和基线不同', 'the system prompt differed from the baseline'),
+  events: () => tx('钩子、选模型、压缩或开发者消息比基线多', 'more hooks, model selections, compactions or developer messages than the baseline'),
+}
+
+/** A plugin that loaded but left no trace was not tested, whatever its difference from the baseline. */
+const NOT_TESTED_PILL = (key?: string): ReactElement => pill(tx('未测到', 'Not tested'), C.warn, C.warnSoft, key)
+
+/** What the runs show of a plugin's use: how many runs left a trace and which. */
+const exposureText = (recorded: number, exercised: number, signals: readonly ExposureSignal[]): string => {
+  if (recorded === 0) return tx('未记录（这些运行早于记录插件痕迹的版本，或没有会话记录）', 'Not recorded (these runs predate recording plugin traces, or have no session log)')
+  if (exercised === 0) return fill(tx('未测到：{n} 次运行都没有发现它起作用的痕迹', 'Not tested: no trace of it at work in {n} runs'), { n: recorded })
+  return fill(tx('{e}/{n} 次运行有痕迹：{s}', '{e} of {n} runs show a trace: {s}'), { e: exercised, n: recorded, s: signals.map(signal => SIGNAL_TEXT[signal]()).join(tx('；', '; ')) })
+}
+
+const exposureOf = (exposure: PluginExposure): string => exposureText(exposure.recorded, exposure.exercised, exposure.signals)
 
 const pct = (value: number): string => (value * 100).toFixed(1)
 const signedPts = (value: number): string => `${value >= 0 ? '+' : '−'}${Math.abs(value * 100).toFixed(1)}`
@@ -245,67 +264,63 @@ function DeltaStrip({ entries }: { readonly entries: readonly PluginComparison[]
   ])
 }
 
-function Overview({ insights, choices, names, onOpen }: { readonly insights: BenchInsights | undefined; readonly choices: BenchRunChoices; readonly names: Names; readonly onOpen: (category: CategoryId) => void }): ReactElement {
-  if (insights === undefined) return h('p', { style: S.muted }, tx('正在读取运行记录…', 'Reading run records…'))
-  if (insights.rows.length === 0) {
-    return h('section', { style: { ...S.card, alignItems: 'flex-start', padding: 24 } }, [
-      h('h2', { key: 't', style: S.h2 }, tx('还没有运行记录', 'No runs yet')),
-      h('p', { key: 'p', style: S.muted }, tx('在上方任选一个分类，挑一个可运行的基准，设置样本数、驱动模型、要对比的插件和预算后开始。每次运行的数据都会保存在本机账本里，并在这里汇总。', 'Pick a category above, choose a runnable benchmark, set the sample, driver, plugins and budget, and start. Every run is saved to the local ledger and summarized here.')),
-      h('button', { key: 'b', type: 'button', style: S.primary, onClick: () => onOpen('math') }, tx('从数学类开始（GSM8K）', 'Start with Mathematics (GSM8K)')),
-    ])
-  }
-  const byPlugin = new Map<string, PluginComparison[]>()
-  for (const entry of insights.comparisons) byPlugin.set(entry.plugin, [...byPlugin.get(entry.plugin) ?? [], entry])
-  const counts = (verdict: Verdict) => insights.comparisons.filter(entry => entry.verdict === verdict).length
-  const loadFailures = insights.health.reduce((sum, entry) => sum + entry.loadFailures, 0)
-  const pluginRuns = insights.health.reduce((sum, entry) => sum + entry.runs, 0)
+const TH: CSSProperties = { padding: '6px 8px', textAlign: 'left', fontSize: 12, color: C.muted, fontWeight: 500, borderBottom: `1px solid ${C.line}`, whiteSpace: 'nowrap' }
+const TD: CSSProperties = { padding: '6px 8px', fontSize: 13, borderBottom: `1px solid ${C.line}`, fontVariantNumeric: 'tabular-nums' }
+const COLUMN: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }
+const QUESTIONS: CSSProperties = { ...S.grid, gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 380px), 1fr))' }
+const reading = (): ReactElement => h('p', { style: S.muted }, tx('正在读取运行记录…', 'Reading run records…'))
+
+/** Shown where results would be before any run: the first step, in the library. */
+function EmptyState({ onStartFirst }: { readonly onStartFirst: () => void }): ReactElement {
+  return h('section', { style: { ...S.card, alignItems: 'flex-start', padding: 24 } }, [
+    h('h2', { key: 't', style: S.h2 }, tx('还没有运行记录', 'No runs yet')),
+    h('p', { key: 'p', style: S.muted }, tx('在「基准库」里任选一个分类，挑一个可运行的基准，设置样本数、驱动模型、要对比的插件和预算后开始。每次运行的数据都会保存在本机账本里，并在这里汇总。', 'In the library, pick a category, choose a runnable benchmark, set the sample, driver, plugins and budget, and start. Every run is saved to the local ledger and summarized here.')),
+    h('button', { key: 'b', type: 'button', style: S.primary, onClick: onStartFirst }, tx('从数学类开始（GSM8K）', 'Start with Mathematics (GSM8K)')),
+  ])
+}
+
+/** Shown on every tab when some ledgers could not be read. */
+export function UnreadableNotice({ insights }: { readonly insights: BenchInsights | undefined }): ReactElement | null {
+  if (insights === undefined || insights.unreadable.length === 0) return null
+  return h('p', { role: 'status', style: { ...S.muted, color: C.warn } }, fill(tx('有 {n} 份账本读不出来，没有计入。', '{n} ledgers could not be read and are left out.'), { n: insights.unreadable.length }))
+}
+
+/** 对照分析: the scoreboard, its notes, the paired comparisons, and cost and speed. */
+export function AnalysisTab({ insights, choices, names, onStartFirst }: { readonly insights: BenchInsights | undefined; readonly choices: BenchRunChoices; readonly names: Names; readonly onStartFirst: () => void }): ReactElement {
+  if (insights === undefined) return reading()
+  if (insights.rows.length === 0) return h(EmptyState, { onStartFirst })
+  const tested = insights.comparisons.filter(entry => entry.exposure.state !== 'unused')
+  const counts = (verdict: Verdict) => tested.filter(entry => entry.verdict === verdict).length
+  const untested = insights.comparisons.length - tested.length
   const costs = insights.comparisons.flatMap(entry => entry.costDelta === null ? [] : [entry.costDelta])
   const walls = insights.comparisons.flatMap(entry => entry.wallDelta === null ? [] : [entry.wallDelta])
   const avg = (values: number[]) => values.reduce((sum, value) => sum + value, 0) / values.length
-  const th: CSSProperties = { padding: '6px 8px', textAlign: 'left', fontSize: 12, color: C.muted, fontWeight: 500, borderBottom: `1px solid ${C.line}`, whiteSpace: 'nowrap' }
-  const td: CSSProperties = { padding: '6px 8px', fontSize: 13, borderBottom: `1px solid ${C.line}`, fontVariantNumeric: 'tabular-nums' }
-  return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 } }, [
+  return h('div', { style: COLUMN }, [
     h('section', { key: 'board', style: { display: 'flex', flexDirection: 'column', gap: 10, minWidth: 0 } }, [
       h('h2', { key: 't', style: S.h2 }, tx('成绩单', 'Scoreboard')),
       h(Scoreboard, { key: 'table', insights, choices, names }),
       h(ScoreNotes, { key: 'notes', insights, choices, names }),
     ]),
-    h('div', { key: 'questions', style: { ...S.grid, gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 380px), 1fr))' } }, [
-      h(Question, {
-        key: 'works',
-        wide: true,
-        title: tx('① 插件功能是否正常？', '① Do the plugins work?'),
-        answer: insights.health.length === 0
-          ? tx('还没有带插件的实验，只跑过基线。', 'No experiment has compared a plugin yet; only baselines ran.')
-          : fill(tx('{n} 个插件共 {runs} 次运行，加载失败 {fail} 次。', '{n} plugins, {runs} runs, {fail} load failures.'), { n: insights.health.length, runs: pluginRuns, fail: loadFailures }),
-      }, insights.health.length === 0 ? null : h('div', { key: 'table', style: { overflowX: 'auto' } }, h('table', { style: { borderCollapse: 'collapse', width: '100%' } }, [
-        h('thead', { key: 'h' }, h('tr', {}, [tx('插件', 'Plugin'), tx('版本', 'Versions'), tx('加载失败', 'Load failures'), tx('无法测量', 'Unmeasurable'), tx('超时', 'Timeouts'), tx('工具出错率', 'Tool errors')].map(text => h('th', { key: text, style: th }, text)))),
-        h('tbody', { key: 'b' }, insights.health.map(entry => h('tr', { key: entry.plugin }, [
-          h('td', { key: 'n', style: td }, names.plugin(entry.plugin)),
-          h('td', { key: 'v', style: { ...td, whiteSpace: 'nowrap' } }, entry.versions.join(' → ')),
-          h('td', { key: 'l', style: { ...td, color: entry.loadFailures > 0 ? C.bad : C.text } }, String(entry.loadFailures)),
-          h('td', { key: 'i', style: td }, `${String(entry.invalid)} / ${String(entry.runs)}`),
-          h('td', { key: 't', style: td }, String(entry.timeouts)),
-          h('td', { key: 'e', style: td }, entry.toolCalls === 0 ? '—' : `${pct(entry.toolErrors / entry.toolCalls)}%`),
-        ]))),
-      ]))),
+    h('div', { key: 'questions', style: QUESTIONS }, [
       h(Question, {
         key: 'helps',
         wide: true,
         title: tx('② 插件是否有效？', '② Do they help?'),
         answer: insights.comparisons.length === 0
           ? tx('还没有插件和基线的配对比较。', 'No plugin has been compared with a baseline yet.')
-          : fill(tx('{n} 次配对比较：显著提升 {up}，显著下降 {down}，持平 {eq}，样本不足或不确定 {open}。', '{n} paired comparisons: {up} improved, {down} regressed, {eq} equivalent, {open} inconclusive or too small.'), { n: insights.comparisons.length, up: counts('improved'), down: counts('regressed'), eq: counts('equivalent'), open: counts('underpowered') + counts('insufficient') + counts('unreliable') }),
+          : fill(tx('{n} 次配对比较：显著提升 {up}，显著下降 {down}，持平 {eq}，样本不足或不确定 {open}', '{n} paired comparisons: {up} improved, {down} regressed, {eq} equivalent, {open} inconclusive or too small'), { n: insights.comparisons.length, up: counts('improved'), down: counts('regressed'), eq: counts('equivalent'), open: counts('underpowered') + counts('insufficient') + counts('unreliable') })
+            + (untested === 0 ? tx('。', '.') : fill(tx('；另有 {u} 次插件加载了但运行里没有发现它起作用的痕迹，记为未测到，差值不能说明它的效果。', '; {u} more loaded the plugin but show no trace of it at work, so they read "not tested" and their difference says nothing about it.'), { u: untested })),
       }, insights.comparisons.length === 0 ? null : h('div', { key: 'table', style: { overflowX: 'auto' } }, h('table', { style: { borderCollapse: 'collapse', width: '100%' } }, [
-        h('thead', { key: 'h' }, h('tr', {}, [tx('结论', 'Verdict'), tx('插件', 'Plugin'), tx('版本', 'Version'), tx('基准', 'Benchmark'), tx('相对基线', 'vs baseline'), tx('95% 区间', '95% interval'), tx('配对题数', 'Paired items')].map(text => h('th', { key: text, style: th }, text)))),
+        h('thead', { key: 'h' }, h('tr', {}, [tx('结论', 'Verdict'), tx('插件', 'Plugin'), tx('版本', 'Version'), tx('基准', 'Benchmark'), tx('相对基线', 'vs baseline'), tx('95% 区间', '95% interval'), tx('配对题数', 'Paired items'), tx('使用证据', 'Evidence of use')].map(text => h('th', { key: text, style: TH }, text)))),
         h('tbody', { key: 'b' }, [...insights.comparisons].reverse().slice(0, 12).map((entry, index) => h('tr', { key: index }, [
-          h('td', { key: 'v', style: td }, verdictPill(entry.verdict)),
-          h('td', { key: 'p', style: td }, names.plugin(entry.plugin)),
-          h('td', { key: 'r', style: { ...td, color: C.muted } }, entry.version),
-          h('td', { key: 'b', style: td }, insights.rows.find(row => row.benchmark === entry.benchmark)?.name ?? entry.benchmark),
-          h('td', { key: 'd', style: { ...td, fontWeight: 600, color: entry.verdict === 'improved' ? C.good : entry.verdict === 'regressed' ? C.bad : C.text } }, signedPts(entry.delta)),
-          h('td', { key: 'i', style: { ...td, color: C.muted, whiteSpace: 'nowrap' } }, `[${signedPts(entry.low)}, ${signedPts(entry.high)}]`),
-          h('td', { key: 'n', style: td }, String(entry.tasks)),
+          h('td', { key: 'v', style: TD }, entry.exposure.state === 'unused' ? NOT_TESTED_PILL() : verdictPill(entry.verdict)),
+          h('td', { key: 'p', style: TD }, names.plugin(entry.plugin)),
+          h('td', { key: 'r', style: { ...TD, color: C.muted } }, entry.version),
+          h('td', { key: 'b', style: TD }, insights.rows.find(row => row.benchmark === entry.benchmark)?.name ?? entry.benchmark),
+          h('td', { key: 'd', style: { ...TD, fontWeight: 600, color: entry.verdict === 'improved' ? C.good : entry.verdict === 'regressed' ? C.bad : C.text } }, signedPts(entry.delta)),
+          h('td', { key: 'i', style: { ...TD, color: C.muted, whiteSpace: 'nowrap' } }, `[${signedPts(entry.low)}, ${signedPts(entry.high)}]`),
+          h('td', { key: 'n', style: TD }, String(entry.tasks)),
+          h('td', { key: 'x', style: { ...TD, fontSize: 12, color: entry.exposure.state === 'unused' ? C.warn : C.muted, minWidth: 180 } }, exposureOf(entry.exposure)),
         ]))),
       ]))),
       h(Question, {
@@ -318,8 +333,42 @@ function Overview({ insights, choices, names, onOpen }: { readonly insights: Ben
             walls.length === 0 ? '' : fill(tx('平均耗时变化 {s} 秒', 'mean time change {s} s'), { s: `${avg(walls) >= 0 ? '+' : '−'}${(Math.abs(avg(walls)) / 1000).toFixed(1)}` }),
           ].filter(Boolean).join(tx('；', '; ')) + fill(tx('（{n} 次比较，正数表示比基线更贵或更慢）。', ' ({n} comparisons; positive means costlier or slower than the baseline).'), { n: Math.max(costs.length, walls.length) }),
       }),
+    ]),
+  ])
+}
+
+/** 诊断与改进: plugin health and the cross-version trend. */
+export function DiagnosisTab({ insights, names, onStartFirst }: { readonly insights: BenchInsights | undefined; readonly names: Names; readonly onStartFirst: () => void }): ReactElement {
+  if (insights === undefined) return reading()
+  if (insights.rows.length === 0) return h(EmptyState, { onStartFirst })
+  const byPlugin = new Map<string, PluginComparison[]>()
+  for (const entry of insights.comparisons) byPlugin.set(entry.plugin, [...byPlugin.get(entry.plugin) ?? [], entry])
+  const loadFailures = insights.health.reduce((sum, entry) => sum + entry.loadFailures, 0)
+  const pluginRuns = insights.health.reduce((sum, entry) => sum + entry.runs, 0)
+  return h('div', { style: COLUMN }, [
+    h('div', { key: 'questions', style: QUESTIONS }, [
+      h(Question, {
+        key: 'works',
+        wide: true,
+        title: tx('① 插件功能是否正常、是否真被用到？', '① Do the plugins work, and were they used?'),
+        answer: insights.health.length === 0
+          ? tx('还没有带插件的实验，只跑过基线。', 'No experiment has compared a plugin yet; only baselines ran.')
+          : fill(tx('{n} 个插件共 {runs} 次运行，加载失败 {fail} 次。', '{n} plugins, {runs} runs, {fail} load failures.'), { n: insights.health.length, runs: pluginRuns, fail: loadFailures }),
+      }, insights.health.length === 0 ? null : h('div', { key: 'table', style: { overflowX: 'auto' } }, h('table', { style: { borderCollapse: 'collapse', width: '100%' } }, [
+        h('thead', { key: 'h' }, h('tr', {}, [tx('插件', 'Plugin'), tx('版本', 'Versions'), tx('加载失败', 'Load failures'), tx('无法测量', 'Unmeasurable'), tx('超时', 'Timeouts'), tx('工具出错率', 'Tool errors'), tx('使用证据', 'Evidence of use')].map(text => h('th', { key: text, style: TH }, text)))),
+        h('tbody', { key: 'b' }, insights.health.map(entry => h('tr', { key: entry.plugin }, [
+          h('td', { key: 'n', style: TD }, names.plugin(entry.plugin)),
+          h('td', { key: 'v', style: { ...TD, whiteSpace: 'nowrap' } }, entry.versions.join(' → ')),
+          h('td', { key: 'l', style: { ...TD, color: entry.loadFailures > 0 ? C.bad : C.text } }, String(entry.loadFailures)),
+          h('td', { key: 'i', style: TD }, `${String(entry.invalid)} / ${String(entry.runs)}`),
+          h('td', { key: 't', style: TD }, String(entry.timeouts)),
+          h('td', { key: 'e', style: TD }, entry.toolCalls === 0 ? '—' : `${pct(entry.toolErrors / entry.toolCalls)}%`),
+          h('td', { key: 'x', style: { ...TD, fontSize: 12, color: entry.recordedRuns > 0 && entry.exercisedRuns === 0 ? C.warn : C.muted, minWidth: 180 } }, exposureText(entry.recordedRuns, entry.exercisedRuns, entry.signals)),
+        ]))),
+      ]))),
       h(Question, {
         key: 'trend',
+        wide: true,
         title: tx('④ 跨版本是否在变好？', '④ Is it improving across versions?'),
         answer: byPlugin.size === 0
           ? tx('需要同一插件在多次实验里的比较。', 'Needs the same plugin compared in several experiments.')
@@ -333,11 +382,10 @@ function Overview({ insights, choices, names, onOpen }: { readonly insights: Ben
         h('p', { key: 'limit', style: { ...S.muted, fontSize: 12 } }, tx('说明：每次运行都从全新的环境开始，所以「运行越多越聪明」这类递归自我提升，在单次实验内测不出来；这里看的是跨版本、跨实验的趋势。', 'Note: every run starts from a fresh home, so self-improvement within one experiment cannot be measured here; this is a cross-version, cross-experiment trend.')),
       ]),
     ]),
-    insights.unreadable.length === 0 ? null : h('p', { key: 'unreadable', style: { ...S.muted, color: C.warn } }, fill(tx('有 {n} 份账本读不出来，没有计入。', '{n} ledgers could not be read and are left out.'), { n: insights.unreadable.length })),
+    h('p', { key: 'rounds', style: { ...S.muted, fontSize: 12 } }, tx('自动改进轮次（冻结基线、在开发题上诊断、提出候选改动、在没用过的留出题上验证，再决定采纳或放弃）还没有做；这一页只读历次实验的结果，不会改动任何插件。', 'Automatic improvement rounds (freeze a baseline, diagnose on development items, propose a change, validate it on untouched held-out items, then accept or reject it) are not built yet; this tab only reads past experiments and changes no plugin.')),
   ])
 }
 
-/** The form of one runnable benchmark. */
 /** Bring the run panel at the top of the page into view. */
 const showJobPanel = (): void => { document.querySelector('[data-bench-job]')?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }
 
@@ -511,23 +559,77 @@ export function BenchmarkCard({ item, latest, saturated, onRun, active }: { read
   ])
 }
 
-function CategoryTab({ category, choices, insights, list, ledgers, runs, onStarted, names, t, job }: {
-  readonly category: { id: CategoryId; title: Bilingual; purpose: Bilingual }
+/** One row of tabs; it wraps inside its own box, and arrow keys, Home and End move between tabs. */
+function TabRow({ label, prefix, tabs, selected, onSelect }: {
+  readonly label: string
+  readonly prefix: string
+  readonly tabs: readonly { id: string; label: string; count?: number }[]
+  readonly selected: string
+  readonly onSelect: (id: string) => void
+}): ReactElement {
+  const move = (event: { key: string; preventDefault: () => void }, index: number) => {
+    const next = event.key === 'ArrowRight' ? index + 1 : event.key === 'ArrowLeft' ? index - 1 : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : undefined
+    if (next === undefined) return
+    event.preventDefault()
+    const target = tabs[(next + tabs.length) % tabs.length]
+    if (target === undefined) return
+    onSelect(target.id)
+    document.getElementById(`${prefix}-tab-${target.id}`)?.focus()
+  }
+  return h('div', { role: 'tablist', 'aria-label': label, style: { display: 'flex', flexWrap: 'wrap', gap: 4, minWidth: 0, borderBottom: `1px solid ${C.line}` } }, tabs.map((entry, index) => h('button', {
+    key: entry.id,
+    id: `${prefix}-tab-${entry.id}`,
+    type: 'button',
+    role: 'tab',
+    'aria-selected': selected === entry.id,
+    'aria-controls': `${prefix}-panel`,
+    tabIndex: selected === entry.id ? 0 : -1,
+    onClick: () => onSelect(entry.id),
+    onKeyDown: (event: { key: string; preventDefault: () => void }) => move(event, index),
+    style: { flex: '0 0 auto', display: 'inline-flex', gap: 6, alignItems: 'center', padding: '8px 12px', border: 'none', borderBottom: `2px solid ${selected === entry.id ? C.brand : 'transparent'}`, background: 'transparent', color: selected === entry.id ? C.text : C.muted, fontSize: 13, fontWeight: selected === entry.id ? 600 : 500, cursor: 'pointer', whiteSpace: 'nowrap' },
+  }, [entry.label, entry.count === undefined ? null : h('span', { key: 'c', style: { fontSize: 11, padding: '0 6px', borderRadius: 999, background: entry.count > 0 ? C.goodSoft : C.hover, color: entry.count > 0 ? C.good : C.faint } }, String(entry.count))])))
+}
+
+const startable = (item: BenchCatalogItem): boolean => item.status === 'runnable' || item.status === 'bundled'
+
+/** 基准库: category tabs, each with its cards and the form that starts an experiment. */
+export function LibraryTab({ category, onCategory, choices, insights, runs, onStarted, names, job }: {
+  readonly category: CategoryId
+  readonly onCategory: (category: CategoryId) => void
   readonly choices: BenchRunChoices
   readonly insights: BenchInsights | undefined
-  readonly list: BenchExperimentList | undefined
-  readonly ledgers: BenchLedgersApi
   readonly runs: BenchRunsApi
   readonly onStarted: () => void
   readonly names: Names
-  readonly t: BenchT
+  readonly job: BenchJobStatus | undefined
+}): ReactElement {
+  const current = choices.categories.find(entry => entry.id === category)
+  return h('div', { style: COLUMN }, [
+    h(TabRow, {
+      key: 'tabs',
+      label: tx('基准分类', 'Benchmark categories'),
+      prefix: 'bench-category',
+      tabs: choices.categories.map(entry => ({ id: entry.id, label: bi(entry.title), count: choices.catalog.filter(item => item.category === entry.id && startable(item)).length })),
+      selected: category,
+      onSelect: id => onCategory(id as CategoryId),
+    }),
+    h('div', { key: 'panel', role: 'tabpanel', id: 'bench-category-panel', 'aria-labelledby': `bench-category-tab-${category}`, style: { minWidth: 0 } }, current === undefined ? null : h(CategoryBody, { key: category, category: current, choices, insights, runs, onStarted, names, job })),
+  ])
+}
+
+function CategoryBody({ category, choices, insights, runs, onStarted, names, job }: {
+  readonly category: { id: CategoryId; title: Bilingual; purpose: Bilingual }
+  readonly choices: BenchRunChoices
+  readonly insights: BenchInsights | undefined
+  readonly runs: BenchRunsApi
+  readonly onStarted: () => void
+  readonly names: Names
   readonly job: BenchJobStatus | undefined
 }): ReactElement {
   const [selected, setSelected] = useState<string | undefined>()
-  const [detail, setDetail] = useState<{ id: string; value?: BenchExperimentDetail; error?: string } | undefined>()
   const items = choices.catalog.filter(item => item.category === category.id)
-  const ordered = [...items.filter(item => item.status === 'runnable' || item.status === 'bundled'), ...items.filter(item => item.status === 'blocked'), ...items.filter(item => item.status === 'reference')]
-  const runnable = items.filter(item => item.status === 'runnable' || item.status === 'bundled').length
+  const ordered = [...items.filter(startable), ...items.filter(item => item.status === 'blocked'), ...items.filter(item => item.status === 'reference')]
+  const runnable = items.filter(startable).length
   const selectedItem = items.find(item => item.id === selected)
   const latest = (id: string): string | undefined => {
     const row = insights?.rows.find(entry => entry.benchmark === id)
@@ -538,7 +640,44 @@ function CategoryTab({ category, choices, insights, list, ledgers, runs, onStart
     }).filter(Boolean)
     return `${tx('最近结果', 'Latest')}：${parts.join('；')}`
   }
-  const experiments = (list?.experiments ?? []).filter(entry => items.some(item => item.id === (entry.benchmark ?? entry.suite))).sort((a, b) => (b.lastEndedAt ?? 0) - (a.lastEndedAt ?? 0))
+  return h('div', { style: COLUMN }, [
+    h('header', { key: 'h', style: { display: 'flex', flexDirection: 'column', gap: 4 } }, [
+      h('h2', { key: 't', style: { ...S.h2, fontSize: 17 } }, bi(category.title)),
+      h('p', { key: 'p', style: S.muted }, `${bi(category.purpose)} ${fill(tx('共 {n} 个公认基准，其中 {r} 个能在这里运行。', '{n} recognized benchmarks; {r} run here.'), { n: items.length, r: runnable })}`),
+      runnable === 0 ? h('p', { key: 'none', style: { ...S.muted, color: C.warn } }, tx('这一类目前没有能在本插件里运行的基准，下面列出它们和原因。Harness 对比页里的内置任务也是多步任务，可以先用它。', 'No benchmark in this category runs here yet; they are listed with the reason. The bundled tasks on the Harness comparison tab are multi-step and can stand in meanwhile.')) : null,
+    ]),
+    h('div', { key: 'grid', style: S.grid }, ordered.map(item => h(BenchmarkCard, { key: item.id, item, latest: latest(item.id), saturated: insights?.rows.find(entry => entry.benchmark === item.id)?.saturated === true, active: selected === item.id, onRun: () => setSelected(selected === item.id ? undefined : item.id) }))),
+    selectedItem === undefined ? null : h(RunForm, { key: `form-${selectedItem.id}`, item: selectedItem, choices, runs, job, onStarted: () => { setSelected(undefined); onStarted() }, onCancel: () => setSelected(undefined) }),
+  ])
+}
+
+/** 运行记录: every experiment, newest first, filtered by category, each with its analysis on demand. */
+export function RecordsTab({ choices, list, ledgers, t, job, onStartFirst }: {
+  readonly choices: BenchRunChoices
+  readonly list: BenchExperimentList | undefined
+  readonly ledgers: BenchLedgersApi
+  readonly t: BenchT
+  readonly job: BenchJobStatus | undefined
+  readonly onStartFirst: () => void
+}): ReactElement {
+  const [filter, setFilter] = useState<string>('all')
+  const [detail, setDetail] = useState<{ id: string; value?: BenchExperimentDetail; error?: string } | undefined>()
+  if (list === undefined) return reading()
+  if (list.experiments.length === 0) return h(EmptyState, { onStartFirst })
+  const itemOf = (entry: BenchExperimentList['experiments'][number]) => choices.catalog.find(item => item.id === (entry.benchmark ?? entry.suite))
+  const categoryOf = (entry: BenchExperimentList['experiments'][number]): string => itemOf(entry)?.category ?? 'other'
+  // An experiment still waiting for its first run has no end time yet and sorts first.
+  const ended = (entry: BenchExperimentList['experiments'][number]) => entry.lastEndedAt ?? Number.MAX_SAFE_INTEGER
+  const all = [...list.experiments].sort((a, b) => ended(b) - ended(a))
+  const present = new Set(all.map(categoryOf))
+  const filters = [
+    { id: 'all', label: tx('全部', 'All'), count: all.length },
+    ...choices.categories.filter(entry => present.has(entry.id)).map(entry => ({ id: entry.id as string, label: bi(entry.title), count: all.filter(e => categoryOf(e) === entry.id).length })),
+    ...present.has('other') ? [{ id: 'other', label: tx('其他', 'Other'), count: all.filter(e => categoryOf(e) === 'other').length }] : [],
+  ]
+  const active = filters.some(entry => entry.id === filter) ? filter : 'all'
+  const shown = active === 'all' ? all : all.filter(entry => categoryOf(entry) === active)
+  const categoryName = (id: string) => { const found = choices.categories.find(entry => entry.id === id); return found === undefined ? tx('其他', 'Other') : bi(found.title) }
   const open = async (id: string) => {
     if (detail?.id === id) {
       setDetail(undefined)
@@ -551,19 +690,14 @@ function CategoryTab({ category, choices, insights, list, ledgers, runs, onStart
       setDetail({ id, error: errorText(cause) })
     }
   }
-  return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 } }, [
-    h('header', { key: 'h', style: { display: 'flex', flexDirection: 'column', gap: 4 } }, [
-      h('h2', { key: 't', style: { ...S.h2, fontSize: 17 } }, bi(category.title)),
-      h('p', { key: 'p', style: S.muted }, `${bi(category.purpose)} ${fill(tx('共 {n} 个公认基准，其中 {r} 个能在这里运行。', '{n} recognized benchmarks; {r} run here.'), { n: items.length, r: runnable })}`),
-      runnable === 0 ? h('p', { key: 'none', style: { ...S.muted, color: C.warn } }, tx('这一类目前没有能在本插件里运行的基准，下面列出它们和原因。Harness 对比页里的内置任务也是多步任务，可以先用它。', 'No benchmark in this category runs here yet; they are listed with the reason. The bundled tasks on the Harness comparison tab are multi-step and can stand in meanwhile.')) : null,
-    ]),
-    h('div', { key: 'grid', style: S.grid }, ordered.map(item => h(BenchmarkCard, { key: item.id, item, latest: latest(item.id), saturated: insights?.rows.find(entry => entry.benchmark === item.id)?.saturated === true, active: selected === item.id, onRun: () => setSelected(selected === item.id ? undefined : item.id) }))),
-    selectedItem === undefined ? null : h(RunForm, { key: `form-${selectedItem.id}`, item: selectedItem, choices, runs, job, onStarted: () => { setSelected(undefined); onStarted() }, onCancel: () => setSelected(undefined) }),
-    experiments.length === 0 ? null : h('section', { key: 'history', style: S.card }, [
-      h('h3', { key: 't', style: S.h2 }, tx('这一类的实验记录', 'Experiments in this category')),
-      ...experiments.map(entry => h('div', { key: entry.id, style: { display: 'flex', flexDirection: 'column', gap: 8, borderTop: `1px solid ${C.line}`, paddingTop: 8 } }, [
-        h('button', { key: 'b', type: 'button', onClick: () => { void open(entry.id) }, style: { ...S.button, textAlign: 'left', display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center', background: 'transparent', border: 'none', padding: '4px 0' } }, [
-          h('strong', { key: 'n' }, choices.catalog.find(item => item.id === (entry.benchmark ?? entry.suite))?.name ?? entry.suite),
+  return h('div', { style: COLUMN }, [
+    h('div', { key: 'filter', role: 'group', 'aria-label': tx('按分类筛选', 'Filter by category'), style: { display: 'flex', flexWrap: 'wrap', gap: 6 } }, filters.map(entry => h('button', { key: entry.id, type: 'button', 'aria-pressed': active === entry.id, onClick: () => setFilter(entry.id), style: { ...S.button, ...active === entry.id ? { borderColor: C.brand, color: C.brand } : {} } }, `${entry.label} · ${String(entry.count)}`))),
+    h('section', { key: 'list', style: S.card }, shown.map(entry => {
+      const name = itemOf(entry)?.name ?? entry.benchmark ?? entry.suite
+      return h('div', { key: entry.id, style: { display: 'flex', flexDirection: 'column', gap: 8, borderTop: `1px solid ${C.line}`, paddingTop: 8 } }, [
+        h('button', { key: 'b', type: 'button', 'aria-expanded': detail?.id === entry.id, onClick: () => { void open(entry.id) }, style: { ...S.button, textAlign: 'left', display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center', background: 'transparent', border: 'none', padding: '4px 0' } }, [
+          h('strong', { key: 'n' }, name),
+          h('span', { key: 'c', style: { color: C.muted } }, categoryName(categoryOf(entry))),
           h('span', { key: 'd', style: { color: C.muted } }, date(entry.lastEndedAt)),
           entry.id === job?.experimentId && (job.state === 'running' || job.state === 'preparing')
             ? h('span', { key: 'live', style: { display: 'inline-flex', gap: 8, alignItems: 'center' } }, [pill(tx('运行中', 'Running'), C.brand, C.hover, 'p'), h('span', { key: 'n', style: { color: C.muted } }, fill(tx('{d}/{t} 次 · 已花费 {s}', '{d}/{t} runs · {s} spent'), { d: job.done, t: job.total, s: usd(job.spentUsd) }))])
@@ -572,9 +706,9 @@ function CategoryTab({ category, choices, insights, list, ledgers, runs, onStart
         ]),
         detail?.id !== entry.id ? null : detail.error !== undefined ? h('p', { key: 'e', style: { ...S.muted, color: C.bad } }, detail.error)
           : detail.value === undefined ? h('p', { key: 'l', style: S.muted }, tx('读取中…', 'Loading…'))
-            : h(Detail, { key: 'd', detail: detail.value, t, title: `${choices.catalog.find(item => item.id === (entry.benchmark ?? entry.suite))?.name ?? entry.suite} · ${date(entry.lastEndedAt)}` }),
-      ])),
-    ]),
+            : h(Detail, { key: 'd', detail: detail.value, t, title: `${name} · ${date(entry.lastEndedAt)}` }),
+      ])
+    })),
   ])
 }
 
@@ -663,6 +797,16 @@ function JobPanel({ job, choices, onStop, names }: { readonly job: BenchJobStatu
   ])
 }
 
+/** The four top-level tabs. */
+export type BenchTab = 'library' | 'records' | 'analysis' | 'diagnosis'
+
+const TOP_TABS: readonly { id: BenchTab; label: () => string }[] = [
+  { id: 'library', label: () => tx('基准库', 'Library') },
+  { id: 'records', label: () => tx('运行记录', 'Run records') },
+  { id: 'analysis', label: () => tx('对照分析', 'Comparisons') },
+  { id: 'diagnosis', label: () => tx('诊断与改进', 'Diagnosis & improvement') },
+]
+
 /** The whole Benchmarks View. */
 export function BenchPage({ ledgers, runs, mountError, t }: {
   readonly ledgers: BenchLedgersApi | undefined
@@ -670,7 +814,8 @@ export function BenchPage({ ledgers, runs, mountError, t }: {
   readonly mountError: string | undefined
   readonly t: BenchT
 }): ReactElement {
-  const [tab, setTab] = useState<'overview' | CategoryId>('overview')
+  const [tab, setTab] = useState<BenchTab>('library')
+  const [category, setCategory] = useState<CategoryId | undefined>()
   const [choices, setChoices] = useState<BenchRunChoices | undefined>()
   const [insights, setInsights] = useState<BenchInsights | undefined>()
   const [list, setList] = useState<BenchExperimentList | undefined>()
@@ -708,34 +853,27 @@ export function BenchPage({ ledgers, runs, mountError, t }: {
     }, 1500)
     return () => clearInterval(timer)
   }, [live, runs, refresh, ledgers])
+  const startFirst = () => { setCategory('math'); setTab('library') }
   const body = (): ReactNode => {
     if (mountError !== undefined) return h('p', { style: { ...S.muted, color: C.bad } }, mountError)
     if (error !== undefined) return h('p', { style: { ...S.muted, color: C.bad } }, error)
     if (choices === undefined || ledgers === undefined || runs === undefined) return h('p', { style: S.muted }, tx('正在连接基准测试服务…', 'Connecting to the benchmark service…'))
-    if (tab === 'overview') return h(Overview, { insights, choices, names, onOpen: setTab })
-    const category = choices.categories.find(entry => entry.id === tab)
-    if (category === undefined) return null
-    return h(CategoryTab, { key: tab, category, choices, insights, list, ledgers, runs, names, t, job, onStarted: () => { void refresh().then(() => requestAnimationFrame(showJobPanel)) } })
+    if (tab === 'records') return h(RecordsTab, { choices, list, ledgers, t, job, onStartFirst: startFirst })
+    if (tab === 'analysis') return h(AnalysisTab, { insights, choices, names, onStartFirst: startFirst })
+    if (tab === 'diagnosis') return h(DiagnosisTab, { insights, names, onStartFirst: startFirst })
+    const shown = category ?? choices.categories[0]?.id
+    if (shown === undefined) return null
+    return h(LibraryTab, { category: shown, onCategory: setCategory, choices, insights, runs, names, job, onStarted: () => { void refresh().then(() => requestAnimationFrame(showJobPanel)) } })
   }
-  const tabs: { id: 'overview' | CategoryId; label: string; count?: number }[] = [
-    { id: 'overview', label: tx('总览与分析', 'Overview & analysis') },
-    ...(choices?.categories ?? []).map(category => ({ id: category.id, label: bi(category.title), count: choices?.catalog.filter(item => item.category === category.id && (item.status === 'runnable' || item.status === 'bundled')).length ?? 0 })),
-  ]
   return h('div', { style: S.scroll }, h('div', { style: S.page }, [
     h('header', { key: 'head', style: { display: 'flex', flexDirection: 'column', gap: 4 } }, [
       h('h1', { key: 't', style: S.h1 }, tx('基准测试', 'Benchmarks')),
       h('p', { key: 'p', style: S.muted }, tx('用公认的公开基准，固定模型、对比 DSH 插件：看功能是否正常、是否有效、成本和速度怎么变、跨版本是否变好。所有运行数据保存在本机账本里。', 'Recognized public benchmarks, a fixed model, and DSH plugins compared against a baseline: do they work, do they help, what do they cost, and do they improve across versions. Every run is saved to the local ledger.')),
     ]),
-    // The run panel stays pinned at the top of the scrolling conversation body while the page scrolls under it.
+    // The run panel stays pinned at the top of the scrolling conversation body while the page scrolls under it, on every tab.
     job === undefined || job.state === 'idle' ? null : h('div', { key: 'job', 'data-bench-job': '', style: { position: 'sticky', top: 0, zIndex: 3, paddingTop: 4, background: C.base } }, h(JobPanel, { job, choices, names, onStop: () => { void runs?.stop().then(setJob, () => undefined) } })),
-    h('nav', { key: 'tabs', role: 'tablist', style: { display: 'flex', gap: 4, overflowX: 'auto', paddingBottom: 2, borderBottom: `1px solid ${C.line}`, scrollbarWidth: 'thin' } }, tabs.map(entry => h('button', {
-      key: entry.id,
-      type: 'button',
-      role: 'tab',
-      'aria-selected': tab === entry.id,
-      onClick: () => setTab(entry.id),
-      style: { flex: '0 0 auto', display: 'inline-flex', gap: 6, alignItems: 'center', padding: '8px 12px', border: 'none', borderBottom: `2px solid ${tab === entry.id ? C.brand : 'transparent'}`, background: 'transparent', color: tab === entry.id ? C.text : C.muted, fontSize: 13, fontWeight: tab === entry.id ? 600 : 500, cursor: 'pointer', whiteSpace: 'nowrap' },
-    }, [entry.label, entry.count === undefined ? null : h('span', { key: 'c', style: { fontSize: 11, padding: '0 6px', borderRadius: 999, background: entry.count > 0 ? C.goodSoft : C.hover, color: entry.count > 0 ? C.good : C.faint } }, String(entry.count))]))),
-    h('main', { key: 'body', style: { minWidth: 0 } }, body()),
+    h(TabRow, { key: 'tabs', label: tx('基准测试', 'Benchmarks'), prefix: 'bench-top', tabs: TOP_TABS.map(entry => ({ id: entry.id, label: entry.label(), ...entry.id === 'records' && list !== undefined ? { count: list.experiments.length } : {} })), selected: tab, onSelect: id => setTab(id as BenchTab) }),
+    h(UnreadableNotice, { key: 'unreadable', insights }),
+    h('main', { key: 'body', role: 'tabpanel', id: 'bench-top-panel', 'aria-labelledby': `bench-top-tab-${tab}`, style: { minWidth: 0 } }, body()),
   ]))
 }

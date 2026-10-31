@@ -23,7 +23,11 @@ export const LEDGER_FORMAT_VERSION_3 = 3
 /** Format version of an experiment run through Harbor (a container benchmark), and of its run records. */
 export const LEDGER_FORMAT_VERSION_4 = 4
 
-const READABLE_VERSIONS: readonly unknown[] = [LEDGER_FORMAT_VERSION, LEDGER_FORMAT_VERSION_2, LEDGER_FORMAT_VERSION_3, LEDGER_FORMAT_VERSION_4]
+/** Format version of a run record that carries `surface`, whatever its experiment's version. */
+export const LEDGER_FORMAT_VERSION_5 = 5
+
+const EXPERIMENT_VERSIONS: readonly unknown[] = [LEDGER_FORMAT_VERSION, LEDGER_FORMAT_VERSION_2, LEDGER_FORMAT_VERSION_3, LEDGER_FORMAT_VERSION_4]
+const RECORD_VERSIONS: readonly unknown[] = [...EXPERIMENT_VERSIONS, LEDGER_FORMAT_VERSION_5]
 
 const formatVersion = z.union([z.literal(LEDGER_FORMAT_VERSION), z.literal(LEDGER_FORMAT_VERSION_2), z.literal(LEDGER_FORMAT_VERSION_3), z.literal(LEDGER_FORMAT_VERSION_4)])
 
@@ -83,7 +87,7 @@ const toolStats = z.object({ calls: z.number().int().nonnegative(), errors: z.nu
 
 /** One `runs.jsonl` line; every field the analysis reads is checked, so a malformed record fails at read with its line number. */
 const runRecordLine = z.object({
-  formatVersion,
+  formatVersion: z.union([formatVersion, z.literal(LEDGER_FORMAT_VERSION_5)]),
   cell: z.object({ variant: z.string().min(1), task: z.string().min(1), rep: z.number().int().nonnegative() }).strict(),
   status: z.enum(['graded', 'timeout', 'invalid']),
   grade: z.object({ pass: z.boolean(), score: z.number().min(0).max(1), details: z.string() }).strict().optional(),
@@ -116,9 +120,15 @@ const runRecordLine = z.object({
   endedAt: z.number(),
   judge: z.object({ calls: z.number().int().nonnegative(), tokens: z.number().nonnegative(), costUsd: z.number().nonnegative().optional() }).strict().optional(),
   answer: z.string().optional(),
+  surface: z.object({
+    tools: z.array(z.string()),
+    system: z.string().regex(/^[0-9a-f]{64}$/),
+    events: z.record(z.string(), z.number().int().nonnegative()),
+  }).strict().optional(),
 }).strict()
   .refine(record => record.status !== 'graded' || (record.grade !== undefined && record.grader !== undefined), 'a graded record carries grade and grader')
   .refine(record => record.formatVersion !== LEDGER_FORMAT_VERSION || (record.judge === undefined && record.answer === undefined), 'a format 1 record carries no judge or answer')
+  .refine(record => (record.surface !== undefined) === (record.formatVersion === LEDGER_FORMAT_VERSION_5), 'a run record carries surface exactly when it is format 5')
 
 /** File pinning the experiment definition. */
 const EXPERIMENT_FILE = 'experiment.json'
@@ -201,8 +211,8 @@ export class ExperimentLedger {
       } catch (error) {
         throw new Error(`${join(this.dir, RUNS_FILE)}:${String(index + 1)}: corrupt run record`, { cause: error })
       }
-      if (!READABLE_VERSIONS.includes(record.formatVersion)) {
-        throw new Error(`BENCH_RECORD_FORMAT: ${join(this.dir, RUNS_FILE)}:${String(index + 1)}: run record format ${String(record.formatVersion)} is not readable by this build (expects 1, 2, 3 or 4)`)
+      if (!RECORD_VERSIONS.includes(record.formatVersion)) {
+        throw new Error(`BENCH_RECORD_FORMAT: ${join(this.dir, RUNS_FILE)}:${String(index + 1)}: run record format ${String(record.formatVersion)} is not readable by this build (expects 1 to 5)`)
       }
       const parsed = runRecordLine.safeParse(record)
       if (!parsed.success) throw new Error(`${join(this.dir, RUNS_FILE)}:${String(index + 1)}: ${z.prettifyError(parsed.error)}`)
@@ -243,7 +253,7 @@ export async function readPinnedExperiment(root: string, id: string): Promise<Ex
     throw new Error(`${file}: not valid JSON`, { cause: error })
   }
   const version = (json as { formatVersion?: unknown } | null)?.formatVersion
-  if (!READABLE_VERSIONS.includes(version)) {
+  if (!EXPERIMENT_VERSIONS.includes(version)) {
     throw new Error(`BENCH_EXPERIMENT_FORMAT: ${file}: ledger format ${String(version)} is not readable by this build (expects 1, 2, 3 or 4)`)
   }
   const parsed = pinnedFile.safeParse(json)

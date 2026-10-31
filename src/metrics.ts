@@ -1,10 +1,11 @@
 /**
- * Fold one run's session logs into {@link RunMetrics}.
+ * Fold one run's session logs into {@link RunMetrics} and {@link RunSurface}.
  * @module @lisihao/dsh-solar-bench/metrics
  */
 
+import { createHash } from 'node:crypto'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import type { RunMetrics, ToolStats } from './types.js'
+import type { RunMetrics, RunSurface, ToolStats } from './types.js'
 
 /** USD per million tokens for one model; `cacheRead` defaults to `input`. */
 export interface ModelPrice {
@@ -128,4 +129,29 @@ export function foldRunMetrics(
   const metrics: RunMetrics = { ...foldRoot(root), tokens, sessions: 1 + children.length }
   if (priced) metrics.costUsd = cost
   return { metrics, models: [...models].sort() }
+}
+
+/** Session events whose count can show a plugin at work without a tool of its own. */
+export const SURFACE_EVENTS = ['hook/invoked', 'model/selection', 'compaction/start', 'developer/message'] as const
+
+/**
+ * Fold what the model was offered and shown in one run: the tool names of the
+ * root session's request headers, a digest of its system prompts, and counts
+ * of {@link SURFACE_EVENTS} across all sessions.
+ * @param root - root session events in seq order.
+ * @param children - subagent session event lists.
+ * @returns the run's surface.
+ */
+export function foldRunSurface(root: readonly SessionEvent[], children: readonly (readonly SessionEvent[])[]): RunSurface {
+  const tools = new Set<string>()
+  const system = createHash('sha256')
+  for (const event of root) {
+    if (event.type === 'request/header') for (const tool of event.data.header.tools ?? []) tools.add(tool.name)
+    else if (event.type === 'system/message') system.update(`${JSON.stringify(event.data.message.content)}\n`)
+  }
+  const events: Record<string, number> = {}
+  for (const event of [root, ...children].flat()) {
+    if ((SURFACE_EVENTS as readonly string[]).includes(event.type)) events[event.type] = (events[event.type] ?? 0) + 1
+  }
+  return { tools: [...tools].sort(), system: system.digest('hex'), events }
 }

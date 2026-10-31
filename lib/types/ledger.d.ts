@@ -14,6 +14,8 @@ export declare const LEDGER_FORMAT_VERSION_2 = 2;
 export declare const LEDGER_FORMAT_VERSION_3 = 3;
 /** Format version of an experiment run through Harbor (a container benchmark), and of its run records. */
 export declare const LEDGER_FORMAT_VERSION_4 = 4;
+/** Format version of a run record that carries `surface`, whatever its experiment's version. */
+export declare const LEDGER_FORMAT_VERSION_5 = 5;
 /**
  * The format version an experiment is written with: the oldest that holds its
  * fields, so a resumed ledger still matches its pinned file and an older build

@@ -130,6 +130,61 @@ export interface ScoreConfig {
   endedAt: number | null
 }
 
+/** Which trace showed a plugin at work in a run. */
+export type ExposureSignal =
+  /** A tool the baseline was not offered was called. */
+  | 'tools'
+  /** The system prompt differs from every baseline run's. */
+  | 'prompt'
+  /** More hook, model-selection, compaction or developer-message events than the baseline run of the same item. */
+  | 'events'
+
+/** Whether a compared plugin was exercised in an experiment, judged against that experiment's baseline. */
+export interface PluginExposure {
+  /** `unrecorded` when the plugin's or the baseline's runs carry no surface (records before format 5, or no session log). */
+  state: 'exercised' | 'unused' | 'unrecorded'
+  /** Plugin runs with a recorded surface. */
+  recorded: number
+  /** Of those, runs where at least one signal showed. */
+  exercised: number
+  /** Signals seen in any run, in a fixed order. */
+  signals: ExposureSignal[]
+}
+
+const SIGNAL_ORDER: readonly ExposureSignal[] = ['tools', 'prompt', 'events']
+
+/**
+ * Decide whether a plugin variant was exercised: for each of its runs with a
+ * recorded surface, a tool the baseline was never offered was called, its
+ * system prompt matches no baseline run, or it logged more of some surface
+ * event than the baseline run of the same item. Plugins shared by every
+ * variant (a scheduling driver) are the same on both sides and never show.
+ * @param records - the experiment's records.
+ * @param variant - the plugin variant.
+ * @param baseline - the baseline variant.
+ * @returns the exposure.
+ */
+export function pluginExposure(records: readonly RunRecord[], variant: string, baseline: string | undefined): PluginExposure {
+  const own = records.filter(record => record.cell.variant === variant && record.surface !== undefined)
+  const base = records.filter(record => record.cell.variant === baseline && record.surface !== undefined)
+  if (own.length === 0 || base.length === 0) return { state: 'unrecorded', recorded: own.length, exercised: 0, signals: [] }
+  const offered = new Set(base.flatMap(record => record.surface?.tools ?? []))
+  const prompts = new Set(base.map(record => record.surface?.system))
+  const seen = new Set<ExposureSignal>()
+  let exercised = 0
+  for (const record of own) {
+    const surface = record.surface as NonNullable<RunRecord['surface']>
+    const signals: ExposureSignal[] = []
+    if (surface.tools.some(tool => !offered.has(tool) && (record.metrics?.tools[tool]?.calls ?? 0) > 0)) signals.push('tools')
+    if (!prompts.has(surface.system)) signals.push('prompt')
+    const peers = base.filter(entry => entry.cell.task === record.cell.task)
+    if (peers.length > 0 && Object.entries(surface.events).some(([kind, count]) => count > Math.max(...peers.map(peer => peer.surface?.events[kind] ?? 0)))) signals.push('events')
+    if (signals.length > 0) exercised += 1
+    for (const signal of signals) seen.add(signal)
+  }
+  return { state: exercised > 0 ? 'exercised' : 'unused', recorded: own.length, exercised, signals: SIGNAL_ORDER.filter(signal => seen.has(signal)) }
+}
+
 /** Health of one plugin across experiments. */
 export interface PluginHealth {
   plugin: string
@@ -142,6 +197,12 @@ export interface PluginHealth {
   timeouts: number
   toolCalls: number
   toolErrors: number
+  /** Plugin runs with a recorded surface, across experiments. */
+  recordedRuns: number
+  /** Of those, runs where the plugin left a trace. */
+  exercisedRuns: number
+  /** Signals seen in any experiment. */
+  signals: ExposureSignal[]
 }
 
 /** One comparison of a plugin against its experiment's baseline. */
@@ -161,6 +222,8 @@ export interface PluginComparison {
   tokenDelta: number | null
   wallDelta: number | null
   endedAt: number | null
+  /** Whether the plugin was exercised in this experiment; an `unused` plugin's verdict says nothing about it. */
+  exposure: PluginExposure
 }
 
 /** Everything the Overview tab shows. */
@@ -255,7 +318,7 @@ export function buildInsights(ledgers: readonly LedgerSnapshot[], options: Analy
       }
       if (plugin === undefined) continue
       const variantRecords = records.filter(record => record.cell.variant === summary.variant)
-      const stats = health.get(plugin.name) ?? { plugin: plugin.name, versions: [], experiments: 0, runs: 0, loadFailures: 0, invalid: 0, timeouts: 0, toolCalls: 0, toolErrors: 0 }
+      const stats = health.get(plugin.name) ?? { plugin: plugin.name, versions: [], experiments: 0, runs: 0, loadFailures: 0, invalid: 0, timeouts: 0, toolCalls: 0, toolErrors: 0, recordedRuns: 0, exercisedRuns: 0, signals: [] }
       health.set(plugin.name, stats)
       if (!stats.versions.includes(plugin.version)) stats.versions.push(plugin.version)
       stats.experiments += 1
@@ -267,6 +330,10 @@ export function buildInsights(ledgers: readonly LedgerSnapshot[], options: Analy
         stats.toolCalls += tool.calls
         stats.toolErrors += tool.errors
       }
+      const exposure = pluginExposure(records, summary.variant, experiment.variants.find(entry => pluginOf(experiment, entry.id) === undefined)?.id)
+      stats.recordedRuns += exposure.recorded
+      stats.exercisedRuns += exposure.exercised
+      stats.signals = SIGNAL_ORDER.filter(signal => stats.signals.includes(signal) || exposure.signals.includes(signal))
       if (comparison === undefined || primary === undefined || primary === null) continue
       comparisons.push({
         plugin: plugin.name,
@@ -284,6 +351,7 @@ export function buildInsights(ledgers: readonly LedgerSnapshot[], options: Analy
         tokenDelta: comparison.tokens?.delta ?? null,
         wallDelta: comparison.wallMs?.delta ?? null,
         endedAt,
+        exposure,
       })
     }
   }

@@ -5,7 +5,7 @@
  * @module @lisihao/dsh-solar-bench/insights
  */
 import type { BenchTier, CategoryId, ResultProtocol } from './catalog.js';
-import type { AnalysisOptions, LedgerSnapshot, Verdict } from './types.js';
+import type { AnalysisOptions, LedgerSnapshot, RunRecord, Verdict } from './types.js';
 /** One scoreboard column: the baseline under one driver, or one plugin. */
 export interface ScoreColumn {
     /** Column key. */
@@ -92,6 +92,37 @@ export interface ScoreConfig {
     judge: string | null;
     endedAt: number | null;
 }
+/** Which trace showed a plugin at work in a run. */
+export type ExposureSignal = 
+/** A tool the baseline was not offered was called. */
+'tools'
+/** The system prompt differs from every baseline run's. */
+ | 'prompt'
+/** More hook, model-selection, compaction or developer-message events than the baseline run of the same item. */
+ | 'events';
+/** Whether a compared plugin was exercised in an experiment, judged against that experiment's baseline. */
+export interface PluginExposure {
+    /** `unrecorded` when the plugin's or the baseline's runs carry no surface (records before format 5, or no session log). */
+    state: 'exercised' | 'unused' | 'unrecorded';
+    /** Plugin runs with a recorded surface. */
+    recorded: number;
+    /** Of those, runs where at least one signal showed. */
+    exercised: number;
+    /** Signals seen in any run, in a fixed order. */
+    signals: ExposureSignal[];
+}
+/**
+ * Decide whether a plugin variant was exercised: for each of its runs with a
+ * recorded surface, a tool the baseline was never offered was called, its
+ * system prompt matches no baseline run, or it logged more of some surface
+ * event than the baseline run of the same item. Plugins shared by every
+ * variant (a scheduling driver) are the same on both sides and never show.
+ * @param records - the experiment's records.
+ * @param variant - the plugin variant.
+ * @param baseline - the baseline variant.
+ * @returns the exposure.
+ */
+export declare function pluginExposure(records: readonly RunRecord[], variant: string, baseline: string | undefined): PluginExposure;
 /** Health of one plugin across experiments. */
 export interface PluginHealth {
     plugin: string;
@@ -104,6 +135,12 @@ export interface PluginHealth {
     timeouts: number;
     toolCalls: number;
     toolErrors: number;
+    /** Plugin runs with a recorded surface, across experiments. */
+    recordedRuns: number;
+    /** Of those, runs where the plugin left a trace. */
+    exercisedRuns: number;
+    /** Signals seen in any experiment. */
+    signals: ExposureSignal[];
 }
 /** One comparison of a plugin against its experiment's baseline. */
 export interface PluginComparison {
@@ -122,6 +159,8 @@ export interface PluginComparison {
     tokenDelta: number | null;
     wallDelta: number | null;
     endedAt: number | null;
+    /** Whether the plugin was exercised in this experiment; an `unused` plugin's verdict says nothing about it. */
+    exposure: PluginExposure;
 }
 /** Everything the Overview tab shows. */
 export interface BenchInsights {

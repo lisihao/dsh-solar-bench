@@ -242,7 +242,7 @@ describe('BenchRunManager', () => {
     expect(launch.argv.slice(0, 8)).toEqual(['--profile', RUN_PROFILE, '--patch', pinned.shared[0], '--patch', pinned.shared[1], '--patch', pinned.variants[1]?.patches[0]])
     const runs = await readFile(join(ledger, 'runs.jsonl'), 'utf8')
     expect(runs).not.toContain(KEY)
-    expect(runs.split('\n').filter(Boolean).every(line => (JSON.parse(line) as { formatVersion: number }).formatVersion === 3)).toBe(true)
+    expect(runs.split('\n').filter(Boolean).every(line => (JSON.parse(line) as { formatVersion: number }).formatVersion === 5)).toBe(true)
     await expect(readFile(join(ledger, 'cells', 'acme-graph', (pinned.tasks as string[])[0] as string, '0', 'home', '.env'))).rejects.toThrow()
     expect((await manager.choices()).history).toEqual([{ benchmark: 'dsh-native', driver: 'deepseek-official/deepseek-flash', globalSkills: true, runs: 4, meanUsd: expect.any(Number) }])
   })
@@ -299,7 +299,7 @@ describe('BenchRunManager', () => {
       expect(pinned.shared).toHaveLength(2)
       expect(pinned.variants[1]?.env).toEqual({ SOLAR_BENCH_PLUGIN: '@acme/graph@0.4.0', SOLAR_BENCH_PLUGIN_SPEC: '/abs/acme-graph-0.4.0.tgz' })
       const records = (await readFile(join(ledger, 'runs.jsonl'), 'utf8')).split('\n').filter(Boolean).map(line => JSON.parse(line) as { formatVersion: number; grade: { score: number } })
-      expect(records.map(entry => [entry.formatVersion, entry.grade.score])).toEqual([[4, 0.25], [4, 0.25]])
+      expect(records.map(entry => [entry.formatVersion, entry.grade.score])).toEqual([[5, 0.25], [5, 0.25]])
       const seen = JSON.parse(await readFile(record, 'utf8')) as { argv: string[] }
       expect(seen.argv).toContain('plugin_spec=/abs/acme-graph-0.4.0.tgz')
       expect(seen.argv[seen.argv.indexOf('--agent-timeout-multiplier') + 1]).toBe(String(1800 / 43200))

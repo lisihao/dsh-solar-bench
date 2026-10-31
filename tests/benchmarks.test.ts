@@ -16,7 +16,7 @@ import {
   mathEquivalent, mathGrader, numberGrader, numberOf, parseAnswer, parseCall, pythonTestsGrader,
 } from '../src/answer-graders.js'
 import { appBundle, APP_PYTHON } from '../src/app.js'
-import { ADAPTATIONS, CATALOG, CATEGORY_IDS, catalogEntry, protocolOf, resultProtocol, shuffledChoices, simpleQaTemplate } from '../src/catalog.js'
+import { ADAPTATIONS, BLOCKERS, CATALOG, CATEGORY_IDS, catalogEntry, protocolOf, resultProtocol, shuffledChoices, simpleQaTemplate } from '../src/catalog.js'
 import type { BenchmarkAdapter } from '../src/catalog.js'
 import { DatasetStore, permutation } from '../src/datasets.js'
 import type { Fetch } from '../src/datasets.js'
@@ -189,6 +189,21 @@ describe('catalog', () => {
     for (const [name, tiers] of byName) expect(tiers.size, name).toBe(1)
     expect(CATALOG.find(entry => entry.id === 'gsm8k')?.tier).toBe('floor')
     expect(CATALOG.find(entry => entry.id === 'aime-2025')?.tier).toBe('ceiling')
+  })
+
+  it('lists the roadmap 2.2 benchmarks as blocked with the piece each one is missing', () => {
+    const blocked = (id: string) => {
+      const entry = catalogEntry(id)
+      return entry?.status.kind === 'blocked' ? { blocker: entry.status.blocker, items: entry.items, paper: entry.paper?.url } : entry?.status
+    }
+    expect(blocked('longmemeval')).toEqual({ blocker: 'history-replay', items: 500, paper: 'https://arxiv.org/abs/2410.10813' })
+    expect(blocked('webarena')).toEqual({ blocker: 'self-hosted-sites', items: 812, paper: 'https://arxiv.org/abs/2307.13854' })
+    expect(blocked('scienceagentbench')).toEqual({ blocker: 'restricted-artifacts', items: 102, paper: 'https://arxiv.org/abs/2410.05080' })
+    for (const entry of CATALOG) {
+      if (entry.status.kind !== 'blocked' && entry.status.kind !== 'reference') continue
+      expect(BLOCKERS[entry.status.blocker].zh, entry.id).not.toBe('')
+      expect(BLOCKERS[entry.status.blocker].en, entry.id).not.toBe('')
+    }
   })
 
   it('pins every whole-file source to a full commit', () => {

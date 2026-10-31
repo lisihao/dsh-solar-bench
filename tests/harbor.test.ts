@@ -246,7 +246,7 @@ describe('a Harbor experiment through the runtime', () => {
     })
     expect(records).toHaveLength(2)
     for (const record of records) {
-      expect(record).toMatchObject({ formatVersion: 4, status: 'graded', grade: { pass: true, score: 0.7 }, grader: { kind: 'harbor-reward', version: 1 } })
+      expect(record).toMatchObject({ formatVersion: 5, surface: { system: expect.stringMatching(/^[0-9a-f]{64}$/) }, status: 'graded', grade: { pass: true, score: 0.7 }, grader: { kind: 'harbor-reward', version: 1 } })
       expect(record.metrics?.tokens.input).toBeGreaterThan(0)
       expect(record.models.length).toBeGreaterThan(0)
     }

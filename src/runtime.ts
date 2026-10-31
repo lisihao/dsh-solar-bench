@@ -22,10 +22,10 @@ import { cellEnv, keepEarlierAttempt, prepareCell, readRunSessions, reapCellProc
 import { permutation } from './datasets.js'
 import { finalText, parseAnswer } from './answer-graders.js'
 import type { JudgeReply } from './judge.js'
-import { cellKey, experimentFormatVersion, ExperimentLedger, listExperimentIds, readPinnedExperiment } from './ledger.js'
+import { cellKey, experimentFormatVersion, ExperimentLedger, LEDGER_FORMAT_VERSION_5, listExperimentIds, readPinnedExperiment } from './ledger.js'
 import { AGENT_DIR, classifyTrial, harborArgv, harborEnv, HARBOR_GRADER, HARBOR_PASS_REWARD, readHarborTrial, runHarbor, taskAgentTimeoutSec } from './harbor.js'
 import type { ContainerLister } from './harbor.js'
-import { foldRunMetrics } from './metrics.js'
+import { foldRunMetrics, foldRunSurface } from './metrics.js'
 import type { ModelPrice } from './metrics.js'
 import type { AnalysisOptions, CellKey, Experiment, ExperimentId, JudgeRequest, JudgeUsage, LedgerSnapshot, RunProgress, RunRecord, Variant } from './types.js'
 
@@ -407,12 +407,13 @@ export class BenchRuntime extends Service {
     // Models the user declared not billed per token (a self-hosted server, a subscription) are priced at zero for this experiment only.
     const prices = [...(experiment.unbilledModels ?? []).map(model => ({ model, input: 0, output: 0, cacheRead: 0 })), ...this.config.prices]
     const { metrics, models } = foldRunMetrics(sessions.root, sessions.children, prices)
+    const surfaced = { formatVersion: LEDGER_FORMAT_VERSION_5, surface: foldRunSurface(sessions.root, sessions.children) } as const
     const unavailable = providerFailure(sessions.root, this.config.providerFailureCodes)
-    if (unavailable !== undefined) return { ...base, status: 'invalid', metrics, models, error: `model unavailable: ${unavailable}`, endedAt: Date.now() }
-    if (exit.timedOut) return { ...base, status: 'timeout', metrics, models, endedAt: Date.now() }
+    if (unavailable !== undefined) return { ...base, ...surfaced, status: 'invalid', metrics, models, error: `model unavailable: ${unavailable}`, endedAt: Date.now() }
+    if (exit.timedOut) return { ...base, ...surfaced, status: 'timeout', metrics, models, endedAt: Date.now() }
     const grader = this.ctx.solarBenchmarks.grader(job.task.grader.kind)
     if (grader === undefined) {
-      return { ...base, status: 'invalid', metrics, models, error: `grader ${JSON.stringify(job.task.grader.kind)} was unregistered during the experiment`, endedAt: Date.now() }
+      return { ...base, ...surfaced, status: 'invalid', metrics, models, error: `grader ${JSON.stringify(job.task.grader.kind)} was unregistered during the experiment`, endedAt: Date.now() }
     }
     const usage: JudgeUsage = { calls: 0, tokens: 0 }
     let unpricedJudge = false
@@ -435,10 +436,10 @@ export class BenchRuntime extends Service {
     try {
       const input = { workspace: dirs.workspace, events: sessions.root, ...signal === undefined ? {} : { signal }, ...judge === undefined ? {} : { judge } }
       const grade = await grader.grade(job.task.grader, input)
-      return { ...base, status: 'graded', grade, grader: { kind: grader.kind, version: grader.version }, metrics, models, ...extra(), endedAt: Date.now() }
+      return { ...base, ...surfaced, status: 'graded', grade, grader: { kind: grader.kind, version: grader.version }, metrics, models, ...extra(), endedAt: Date.now() }
     } catch (error) {
       signal?.throwIfAborted()
-      return { ...base, status: 'invalid', metrics, models, ...extra(), error: `grader failed: ${redact((error as Error).message)}`, endedAt: Date.now() }
+      return { ...base, ...surfaced, status: 'invalid', metrics, models, ...extra(), error: `grader failed: ${redact((error as Error).message)}`, endedAt: Date.now() }
     }
   }
 
@@ -514,17 +515,19 @@ export class BenchRuntime extends Service {
     const packages = (await Promise.all(job.variant.patches.map(async patch => patchPackageNames(await readFile(patch, 'utf8').catch(() => ''))))).flat()
     const verdict = classifyTrial(result, inactivePatchRow(packages, redact(result.agentLog)))
     let metrics
+    let surface
     let models: string[] = []
     let unavailable: string | undefined
     try {
       const sessions = await readRunSessions(result.dshHome)
       const prices = [...(experiment.unbilledModels ?? []).map(model => ({ model, input: 0, output: 0, cacheRead: 0 })), ...this.config.prices]
       ;({ metrics, models } = foldRunMetrics(sessions.root, sessions.children, prices))
+      surface = foldRunSurface(sessions.root, sessions.children)
       unavailable = providerFailure(sessions.root, this.config.providerFailureCodes)
     } catch {
       // No session files: the agent never ran (an install or setup failure), which the verdict below names.
     }
-    const measured = { ...metrics === undefined ? {} : { metrics }, models }
+    const measured = { ...metrics === undefined ? {} : { metrics }, ...surface === undefined ? {} : { formatVersion: LEDGER_FORMAT_VERSION_5 as typeof LEDGER_FORMAT_VERSION_5, surface }, models }
     if (verdict.status === 'invalid' && verdict.error.startsWith('plugin under test')) return { ...base, status: 'invalid', ...measured, error: verdict.error, endedAt: Date.now() }
     if (unavailable !== undefined) return { ...base, status: 'invalid', ...measured, error: `model unavailable: ${unavailable}`, endedAt: Date.now() }
     if (verdict.status === 'invalid') return { ...base, status: 'invalid', ...measured, error: redact(verdict.error), endedAt: Date.now() }

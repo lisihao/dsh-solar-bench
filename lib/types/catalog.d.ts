@@ -35,7 +35,7 @@ export declare const TIERS: Readonly<Record<BenchTier, {
     purpose: Bilingual;
 }>>;
 /** Why a listed benchmark is not run here. */
-export type Blocker = 'harbor' | 'expert-grading' | 'checkers' | 'docker' | 'gated' | 'multi-turn' | 'images' | 'generator' | 'pairwise' | 'human-votes' | 'not-public' | 'no-license' | 'large-data' | 'test-harness' | 'browser';
+export type Blocker = 'harbor' | 'expert-grading' | 'checkers' | 'docker' | 'gated' | 'multi-turn' | 'images' | 'generator' | 'pairwise' | 'human-votes' | 'not-public' | 'no-license' | 'large-data' | 'test-harness' | 'browser' | 'history-replay' | 'self-hosted-sites' | 'restricted-artifacts';
 /** Explanation of each blocker. */
 export declare const BLOCKERS: Readonly<Record<Blocker, Bilingual>>;
 /** Turns fetched rows into tasks. */
@@ -82,7 +82,7 @@ export interface CatalogEntry {
     };
     /** License as read from the source. */
     license: string;
-    /** Items in the source, as read on 2026-10-28; absent when not counted. */
+    /** Items in the source, as read on 2026-10-28 (LongMemEval, WebArena and ScienceAgentBench on 2026-10-31); absent when not counted. */
     items?: number;
     /** Measurement caveat shown on the card. */
     caveat?: Bilingual;

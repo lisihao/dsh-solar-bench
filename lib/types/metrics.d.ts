@@ -1,9 +1,9 @@
 /**
- * Fold one run's session logs into {@link RunMetrics}.
+ * Fold one run's session logs into {@link RunMetrics} and {@link RunSurface}.
  * @module @lisihao/dsh-solar-bench/metrics
  */
 import type { SessionEvent } from '@deepseek-ai/dsh-session';
-import type { RunMetrics } from './types.js';
+import type { RunMetrics, RunSurface } from './types.js';
 /** USD per million tokens for one model; `cacheRead` defaults to `input`. */
 export interface ModelPrice {
     /** Provider model id as logged on assistant messages. */
@@ -28,3 +28,14 @@ export declare function foldRunMetrics(root: readonly SessionEvent[], children: 
     metrics: RunMetrics;
     models: string[];
 };
+/** Session events whose count can show a plugin at work without a tool of its own. */
+export declare const SURFACE_EVENTS: readonly ["hook/invoked", "model/selection", "compaction/start", "developer/message"];
+/**
+ * Fold what the model was offered and shown in one run: the tool names of the
+ * root session's request headers, a digest of its system prompts, and counts
+ * of {@link SURFACE_EVENTS} across all sessions.
+ * @param root - root session events in seq order.
+ * @param children - subagent session event lists.
+ * @returns the run's surface.
+ */
+export declare function foldRunSurface(root: readonly SessionEvent[], children: readonly (readonly SessionEvent[])[]): RunSurface;

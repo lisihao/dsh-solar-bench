@@ -490,6 +490,9 @@ describe('BenchRunManager', () => {
     await expect(manager.start(form({ driver: { kind: 'model', provider: 'graph-sub', model: 'g-1' }, plugins: [], subscriptionAccepted: true }))).rejects.toThrow(/BENCH_PLUGIN_PROTECTED/)
     await writePlugin(profile, '@acme/graph', { version: '0.4.0', patch: "- id: agent-default-model\n  config:\n    model: other\n- id: skill-filesystem\n  config:\n    agentsHome: /x\n" })
     await expect(manager.start(form({ plugins: ['@acme/graph'] }))).rejects.toThrow(/sets agent-default-model, skill-filesystem/)
+    // Bundle patches nest their rows under operations such as insert:.
+    await writePlugin(profile, '@acme/graph', { version: '0.4.0', patch: "- insert:\n    - id: graph\n      name: '@acme/graph'\n    - id: tool-web\n      disabled: false\n" })
+    await expect(manager.start(form({ plugins: ['@acme/graph'] }))).rejects.toThrow(/BENCH_PLUGIN_PROTECTED: @acme\/graph sets tool-web/)
     expect(manager.status().state).toBe('idle')
   })
 

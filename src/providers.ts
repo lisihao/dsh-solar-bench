@@ -97,14 +97,24 @@ const JS_TAG = {
 export const PROTECTED_ROWS: readonly string[] = ['agent-default-model', 'tool-web', 'skill-filesystem']
 
 /**
- * The protected rows a bundle patch sets at its top level.
+ * The protected rows a bundle patch sets, wherever they sit: bundle patches nest rows under operations such as `insert:`.
  * @param file - the patch file.
- * @returns the row ids found, in file order.
+ * @returns the row ids found, in file order, each once.
  */
 export async function protectedRowsIn(file: string): Promise<string[]> {
-  const value = parse(await readFile(file, 'utf8'), { customTags: [JS_TAG] }) as unknown
-  if (!Array.isArray(value)) return []
-  return value.flatMap(row => row !== null && typeof row === 'object' && typeof (row as PatchRow).id === 'string' && PROTECTED_ROWS.includes((row as PatchRow).id as string) ? [(row as PatchRow).id as string] : [])
+  const found = new Set<string>()
+  const walk = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      for (const entry of value) walk(entry)
+      return
+    }
+    if (value === null || typeof value !== 'object' || value instanceof JsExpression) return
+    const id = (value as PatchRow).id
+    if (typeof id === 'string' && PROTECTED_ROWS.includes(id)) found.add(id)
+    for (const entry of Object.values(value)) walk(entry)
+  }
+  walk(parse(await readFile(file, 'utf8'), { customTags: [JS_TAG] }) as unknown)
+  return [...found]
 }
 
 /** One row of a profile patch. */

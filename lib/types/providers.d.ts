@@ -61,9 +61,9 @@ export declare class JsExpression {
 /** Rows every group of an experiment shares and a plugin's bundle patch may not set: the driver model, the web-tool switch and the skill loader. */
 export declare const PROTECTED_ROWS: readonly string[];
 /**
- * The protected rows a bundle patch sets at its top level.
+ * The protected rows a bundle patch sets, wherever they sit: bundle patches nest rows under operations such as `insert:`.
  * @param file - the patch file.
- * @returns the row ids found, in file order.
+ * @returns the row ids found, in file order, each once.
  */
 export declare function protectedRowsIn(file: string): Promise<string[]>;
 /** One row of a profile patch. */

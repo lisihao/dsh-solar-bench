@@ -151,7 +151,7 @@ Prices (USD per million tokens, peak-hour CNY at 7.2 CNY/USD; the page's off-pea
 | `deepseek-flash` | 0.2778 (¥2) | 0.0056 (¥0.04) | 1.1111 (¥8) | DeepSeek zh pricing page, 2026-10-28 |
 | `deepseek-v4-pro` | 1.25 (¥9) | 0.0417 (¥0.30) | 3.75 (¥27) | same page; column mapping read from extracted text, to be confirmed on the live page before release |
 
-Judged benchmarks spend on the judge too: the judge is one more one-shot `dsh` child with the experiment's driver and no plugins, and its cost is added to the run.
+Judged benchmarks spend on the judge too: the judge is one chat-completion request per grade (temperature 0) to the DeepSeek API with the judge model chosen on the form, outside any harness, and its cost is added to the run.
 
 ## 4. Grading
 
@@ -176,7 +176,7 @@ Each grader has a conformance pair (a correct answer passes, a wrong one fails) 
 
 - `datasets/<benchmark>/<revision>.json`: `{ formatVersion: 1, benchmark, source, revision, fetchedAt, rows }`. A reader refuses another version with `BENCH_DATASET_FORMAT`.
 - `ledgers/<experiment>/experiment.json`: `formatVersion: 2` adds `benchmark` (id, source, revision, item ids), `driver`, `shared` (patches applied to every variant: driver, scheduling, web off), `budgetUsd`, `webTools`; `formatVersion: 3` adds `globalSkills`. Version 1 and 2 ledgers still read; any other version fails with `BENCH_EXPERIMENT_FORMAT`.
-- `ledgers/<experiment>/runs.jsonl`: run records, unchanged at `formatVersion: 1`, plus an optional `judge` cost field.
+- `ledgers/<experiment>/runs.jsonl`: run records at their experiment's format version; version 2 and 3 records may carry the judge's usage and the parsed answer.
 
 ## 6. Analysis
 

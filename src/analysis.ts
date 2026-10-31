@@ -90,7 +90,7 @@ function estimate(diffs: readonly number[], options: AnalysisOptions): Estimate 
     const sd = Math.sqrt(diffs.reduce((sum, value) => sum + (value - delta) ** 2, 0) / (n - 1))
     mde = (tQuantile(Z[options.confidence], n - 1) + tQuantile(Z_POWER, n - 1)) * sd / Math.sqrt(n)
   }
-  return { delta, low: at(tail), high: at(1 - tail), mde, tasks: n }
+  return { delta, low: at(tail), high: at(1 - tail), mde, tasks: n, discordant: diffs.filter(value => value !== 0).length }
 }
 
 /** Valid-run tallies of one (variant, task). */
@@ -138,6 +138,9 @@ function summarize(
   for (const record of records) {
     if (record.status === 'invalid') {
       invalid += 1
+      // An unmeasurable run still spent money; it counts toward cost, not toward success rates.
+      const cost = record.metrics === undefined ? undefined : runCost(record)
+      if (cost !== undefined) costs.push(cost)
       continue
     }
     if (record.status === 'graded') graded += 1
@@ -187,6 +190,7 @@ function summarize(
     invalid,
     invalidRate: records.length === 0 ? 0 : invalid / records.length,
     successRate: valid === 0 ? null : passed / valid,
+    endToEndRate: records.length === 0 ? null : passed / records.length,
     passAnyRate: rateOf(validTasks.filter(task => (cells.get(task) as TaskCell).passed > 0).length),
     passAllRate: rateOf(validTasks.filter((task) => {
       const cell = cells.get(task) as TaskCell
@@ -245,7 +249,10 @@ function verdictOf(success: Estimate, invalidGap: number, options: AnalysisOptio
   if (success.tasks < options.minTasks) return 'insufficient'
   if (success.low > 0) return 'improved'
   if (success.high < 0) return 'regressed'
-  if (success.low >= -options.margin && success.high <= options.margin) return 'equivalent'
+  // With no task differing, the bootstrap interval collapses to [0, 0] whatever the sample size. By the rule of three,
+  // N agreeing tasks bound the difference only to about 3/N, so equivalence needs N ≥ 3 / margin.
+  const bounded = success.discordant > 0 || success.tasks * options.margin >= 3
+  if (bounded && success.low >= -options.margin && success.high <= options.margin) return 'equivalent'
   return 'underpowered'
 }
 
@@ -280,9 +287,9 @@ export function analyzeExperiment(experiment: Experiment, records: readonly RunR
     const pairedTasks = tasks.filter(task => baseline.cells.has(task) && cells.has(task))
     const droppedTasks = tasks.filter(task => !pairedTasks.includes(task))
     const success = paired(pairedTasks, baseline.cells, cells, cell => [cell.passed / cell.valid], options)
-      ?? { delta: 0, low: 0, high: 0, mde: null, tasks: 0 }
+      ?? { delta: 0, low: 0, high: 0, mde: null, tasks: 0, discordant: 0 }
     const score = paired(pairedTasks, baseline.cells, cells, cell => cell.scores, options)
-    const primary = metric === 'score' ? score ?? { delta: 0, low: 0, high: 0, mde: null, tasks: 0 } : success
+    const primary = metric === 'score' ? score ?? { delta: 0, low: 0, high: 0, mde: null, tasks: 0, discordant: 0 } : success
     return {
       variant: summary.variant,
       success,

@@ -89,8 +89,10 @@ export interface ComparisonText {
  */
 export function describeComparison(comparison: Comparison, analysis: ExperimentAnalysis, t: BenchT): ComparisonText {
   const { success } = comparison
+  const primary = analysis.metric === 'score' && comparison.score !== null ? comparison.score : success
+  const unobserved = comparison.verdict === 'underpowered' && primary.discordant === 0 && primary.tasks > 0
   const rate = (id: string) => percent(analysis.variants.find(entry => entry.variant === id)?.invalidRate ?? null)
-  const detail = fill(t(EXPLANATION[comparison.verdict]), {
+  const detail = fill(t(unobserved ? 'explainUnobserved' : EXPLANATION[comparison.verdict]), {
     delta: points(success.delta),
     tasks: success.tasks,
     level: analysis.options.confidence * 100,
@@ -98,6 +100,8 @@ export function describeComparison(comparison: Comparison, analysis: ExperimentA
     high: points(success.high),
     margin: points(analysis.options.margin).slice(1),
     mde: success.mde === null ? '—' : points(success.mde).slice(1),
+    bound: points(Math.min(1, 3 / Math.max(1, primary.tasks))).slice(1),
+    need: Math.ceil(3 / analysis.options.margin),
     min: analysis.options.minTasks,
     variant: comparison.variant,
     here: rate(comparison.variant),

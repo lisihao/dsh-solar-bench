@@ -357,7 +357,8 @@ function RunForm({ item, choices, runs, onStarted, onCancel, job }: {
   const [reps, setReps] = useState('1')
   const [budget, setBudget] = useState('')
   const [web, setWeb] = useState(false)
-  const [skills, setSkills] = useState(true)
+  // Off by default: comparisons are cleaner and far cheaper without the user's skill catalog; check it to mirror daily use.
+  const [skills, setSkills] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | undefined>()
   const toggle = (list: string[], name: string) => list.includes(name) ? list.filter(entry => entry !== name) : [...list, name]
@@ -440,7 +441,7 @@ function RunForm({ item, choices, runs, onStarted, onCancel, job }: {
       comparable.length === 0 ? h('p', { key: 'none', style: S.muted }, tx('桌面端没有启用第三方插件。', 'No third-party plugin is enabled in the desktop app.')) : h('div', { key: 'list', style: { display: 'grid', gap: 6, gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 220px), 1fr))' } }, comparable.map(plugin => check(plugin.name, `${title(plugin)} · ${plugin.version}`, plugins.includes(plugin.name), () => setPlugins(toggle(plugins, plugin.name))))),
     ]),
     check('web', tx('允许联网搜索和抓取（默认关闭：会让模型直接查到答案，且 11 月 1 日起按次计费，预算无法覆盖）。关闭的只是 DSH 的联网工具，命令行工具仍可能访问网络。', 'Allow web search and fetch (off by default: it lets the agent look answers up, and from Nov 1 it is billed per call outside the budget). This turns off DSH\'s web tools only; shell commands may still reach the network.'), web, () => setWeb(!web)),
-    check('skills', tx('带上本机的全局技能（~/.agents/skills）：和日常使用一致，比较「技能按需上下文」这类插件时需要。技能目录会进每次请求，是主要花费：在 GSM8K 上用 flash 实测每题约 $0.022。不勾选时只去掉全局技能，内置技能和其他设置不变；实测请求体约缩小到 1/17，花费预计低很多，但还没用真实计费核对过。', 'Include your global skills (~/.agents/skills): matches daily use, and is needed to compare plugins such as on-demand skill context. The catalog goes into every request and is the main cost: about $0.022 per GSM8K item on flash, measured. Unchecked leaves out the global skills only; bundled skills and other settings stay. The request body measured about 1/17 the size, so it should cost much less, not yet checked against real billing.'), skills, () => setSkills(!skills)),
+    check('skills', tx('带上本机的全局技能（~/.agents/skills）：模拟日常使用，比较「技能按需上下文」这类插件时需要。默认不带：技能目录会进每次请求，是主要花费；在 GSM8K 上用 flash 实测，带时每题约 $0.022，不带时约 $0.0003。不带时只去掉全局技能，内置技能和其他设置不变。', 'Include your global skills (~/.agents/skills): mirrors daily use, and is needed to compare plugins such as on-demand skill context. Off by default: the catalog goes into every request and is the main cost; measured on GSM8K with flash, about $0.022 per item with it and about $0.0003 without. Off leaves out the global skills only; bundled skills and other settings stay.'), skills, () => setSkills(!skills)),
     !skills && plugins.includes('@lisihao/dsh-solar-skill-context') ? h('p', { key: 'skill-context', style: { ...S.muted, fontSize: 12, color: C.warn } }, tx('「技能按需上下文」要有全局技能才有东西可省；不带全局技能时，它和基线的对比说明不了它的效果。', 'On-demand skill context only has something to trim when global skills are present; without them its comparison with the baseline says little about it.')) : null,
     h('div', { key: 'plan', style: { display: 'flex', flexDirection: 'column', gap: 4, padding: 12, borderRadius: 10, background: C.hover, fontSize: 13 } }, [
       h('div', { key: 'runs' }, fill(tx('共 {runs} 次运行 = {n} 题 × {v} 组（基线 + {p} 个插件）× {r} 次', '{runs} runs = {n} items × {v} groups (baseline + {p} plugins) × {r}'), { runs: runCount, n: Number.isInteger(n) ? n : 0, v: variants, p: plugins.length, r: Math.max(1, Number(reps) || 1) })),
@@ -592,6 +593,7 @@ const REASONS: readonly [RegExp, (match: RegExpExecArray) => string][] = [
   [/^an experiment is already running/, () => '已有实验在运行，请先停止或等它结束'],
   [/^BENCH_DATASET_FETCH|answered HTTP/, () => '读取数据集失败（网络或数据源限流），请稍后重试'],
   [/^session log unreadable/, () => '读不到会话记录'],
+  [/^(\S+) sets (.+), which the experiment fixes for every group/, m => `所选插件（${m[1] as string}）的配置会改动 ${m[2] as string}，这些设置由实验统一固定，不能开跑`],
 ]
 
 const reasonText = (reason: string): string => {

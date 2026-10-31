@@ -13,14 +13,14 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import {
   bfclGrader, bfclValueMatches, choiceGrader, choiceLetter, exactGrader, finalText, judgeScoreGrader, judgeSimpleQaGrader,
-  mathEquivalent, mathGrader, numberGrader, parseAnswer, parseCall, pythonTestsGrader,
+  mathEquivalent, mathGrader, numberGrader, numberOf, parseAnswer, parseCall, pythonTestsGrader,
 } from '../src/answer-graders.js'
 import { appBundle, APP_PYTHON } from '../src/app.js'
 import { CATALOG, CATEGORY_IDS, shuffledChoices, simpleQaTemplate } from '../src/catalog.js'
 import type { BenchmarkAdapter } from '../src/catalog.js'
 import { DatasetStore, permutation } from '../src/datasets.js'
 import type { Fetch } from '../src/datasets.js'
-import { buildInsights, saturatedRow } from '../src/insights.js'
+import { binomialLowerBound, buildInsights, saturatedRow } from '../src/insights.js'
 import { BenchmarkCard } from '../src/page.js'
 import type { BenchCatalogItem } from '../src/runs.js'
 import { createJudge } from '../src/judge.js'
@@ -61,12 +61,23 @@ describe('answer parsing', () => {
     expect(mathEquivalent('5\\text{ cm}', '5')).toBe(true)
     expect(mathEquivalent('6', '5')).toBe(false)
   })
+
+  it('reads one number, refusing expressions and trailing numbers', () => {
+    expect(numberOf('6/2')).toBeUndefined()
+    expect(numberOf('42+1')).toBeUndefined()
+    expect(numberOf('42 (approx)')).toBeUndefined()
+    expect(numberOf('18 dollars')).toBe(18)
+    expect(numberOf('$1,000')).toBe(1000)
+    expect(numberOf('18.')).toBe(18)
+    expect(numberOf('-4')).toBe(-4)
+  })
 })
 
 describe('answer graders: a right answer passes, a wrong one fails', () => {
   const cases: [string, typeof choiceGrader, GraderSpec, string, string][] = [
     ['choice', choiceGrader, { kind: 'answer-choice', answer: 'B' }, 'ANSWER: B', 'ANSWER: A'],
     ['number', numberGrader, { kind: 'answer-number', answer: '1,200' }, 'ANSWER: $1200.00', 'ANSWER: 120'],
+    ['number, not an expression', numberGrader, { kind: 'answer-number', answer: '6' }, 'ANSWER: 6', 'ANSWER: 6/2'],
     ['math', mathGrader, { kind: 'answer-math', answer: '\\frac{3}{4}' }, 'ANSWER: \\tfrac{3}{4}', 'ANSWER: \\frac{4}{3}'],
     ['exact', exactGrader, { kind: 'answer-exact', answer: 'True' }, 'ANSWER: true', 'ANSWER: False'],
   ]
@@ -120,6 +131,13 @@ describe('answer graders: a right answer passes, a wrong one fails', () => {
     expect((await grader.grade(spec, { workspace: dir, events: [] })).pass).toBe(true)
     await writeFile(join(dir, 'solution.py'), 'def add(a, b):\n    return a - b\n')
     expect(await grader.grade(spec, { workspace: dir, events: [] })).toMatchObject({ pass: false, details: expect.stringMatching(/AssertionError/) })
+    // The program under test gets a minimal environment, not the host's variables; numpy still imports (HumanEval+ needs it).
+    process.env.SOLAR_BENCH_HOST_SECRET = 'host-only'
+    try {
+      expect((await grader.grade({ ...spec, program: 'import os, numpy\nassert "SOLAR_BENCH_HOST_SECRET" not in os.environ\n' }, { workspace: dir, events: [] })).pass).toBe(true)
+    } finally {
+      delete process.env.SOLAR_BENCH_HOST_SECRET
+    }
     await writeFile(join(dir, 'solution.py'), 'import time\ndef add(a, b):\n    time.sleep(30)\n')
     expect((await grader.grade({ ...spec, program: 'from solution import *\nadd(1, 2)\n', timeoutMs: 300 }, { workspace: dir, events: [] })).details).toMatch(/exceeded 300 ms/)
   })
@@ -359,7 +377,7 @@ describe('insights', () => {
     expect(row?.cells['baseline:deepseek-official/deepseek-flash']).toMatchObject({ value: 0, experiment: 'e2' })
     expect(insights.configs).toEqual([expect.objectContaining({ experiment: 'e2', items: 5, driver: 'deepseek-official/deepseek-flash', webTools: false, globalSkills: true, judge: null })])
     expect(insights.health).toEqual([expect.objectContaining({ plugin: '@acme/mem', versions: ['1.0.0', '1.1.0'], experiments: 2, runs: 11, loadFailures: 1, invalid: 1 })])
-    expect(insights.comparisons.map(entry => [entry.version, entry.verdict])).toEqual([['1.0.0', 'equivalent'], ['1.1.0', 'improved']])
+    expect(insights.comparisons.map(entry => [entry.version, entry.verdict])).toEqual([['1.0.0', 'underpowered'], ['1.1.0', 'improved']])
     expect(insights.comparisons[1]?.costDelta).toBeCloseTo(0.01)
   })
 
@@ -394,22 +412,30 @@ describe('insights', () => {
     expect(insights.rows[0]?.cells['plugin:@acme/mem:deepseek-official/deepseek-flash']?.value).toBeCloseTo(0.7)
   })
 
-  const ten = Array.from({ length: 10 }, (_, index) => `p0-${String(index)}`)
-  const baselineOnly = (id: string, passes: number, runs = 10, endedAt = 100): { experiment: Experiment; records: RunRecord[] } => ({
-    experiment: { ...experiment(id, '1.0.0'), tasks: ten.slice(0, runs), variants: [{ id: 'baseline', patches: [], env: {} }] },
-    records: ten.slice(0, runs).map((task, index) => record('baseline', task, index < passes, endedAt)),
+  const pool = Array.from({ length: 40 }, (_, index) => `p0-${String(index)}`)
+  const baselineOnly = (id: string, passes: number, runs = 29, endedAt = 100): { experiment: Experiment; records: RunRecord[] } => ({
+    experiment: { ...experiment(id, '1.0.0'), tasks: pool.slice(0, runs), variants: [{ id: 'baseline', patches: [], env: {} }] },
+    records: pool.slice(0, runs).map((task, index) => record('baseline', task, index < passes, endedAt)),
   })
 
-  it('marks a pass-rate benchmark saturated from its latest baseline with enough runs, and carries the tier', () => {
-    expect(buildInsights([baselineOnly('e1', 10)], OPTIONS).rows[0]).toMatchObject({ benchmark: 'gsm8k', tier: 'floor', saturated: true })
-    expect(buildInsights([baselineOnly('e1', 9)], OPTIONS).rows[0]?.saturated).toBe(true)
-    expect(buildInsights([baselineOnly('e1', 8)], OPTIONS).rows[0]?.saturated).toBe(false)
-    expect(buildInsights([baselineOnly('e1', 9, 9)], OPTIONS).rows[0]?.saturated).toBe(false)
+  it('marks a pass-rate benchmark saturated when its one-sided 95% lower bound clears 90%, counting items, and carries the tier', () => {
+    expect(binomialLowerBound(29, 29, 0.95)).toBeGreaterThan(0.9)
+    expect(binomialLowerBound(28, 28, 0.95)).toBeLessThan(0.9)
+    expect(binomialLowerBound(10, 10, 0.95)).toBeCloseTo(0.741, 3)
+    expect(buildInsights([baselineOnly('e1', 29)], OPTIONS).rows[0]).toMatchObject({ benchmark: 'gsm8k', tier: 'floor', saturated: true })
+    expect(buildInsights([baselineOnly('e1', 28, 28)], OPTIONS).rows[0]?.saturated).toBe(false)
+    expect(buildInsights([baselineOnly('e1', 30, 31)], OPTIONS).rows[0]?.saturated).toBe(false)
+    expect(buildInsights([baselineOnly('e1', 10, 10)], OPTIONS).rows[0]?.saturated).toBe(false)
+    // 15 items run twice: 30 passing runs, but only 15 independent items.
+    const twice = baselineOnly('e1', 15, 15)
+    const repeated = { experiment: { ...twice.experiment, repetitions: 2 }, records: [...twice.records, ...twice.records.map(entry => ({ ...entry, cell: { ...entry.cell, rep: 1 } }))] }
+    expect(buildInsights([repeated], OPTIONS).rows[0]?.cells['baseline:deepseek-official/deepseek-flash']).toMatchObject({ runs: 30, items: 15, passedItems: 15 })
+    expect(buildInsights([repeated], OPTIONS).rows[0]?.saturated).toBe(false)
   })
 
   it('ignores a saturated baseline from an earlier experiment than the row\'s latest', () => {
-    const older = baselineOnly('e1', 10, 10, 100)
-    const newer = baselineOnly('e2', 0, 10, 200)
+    const older = baselineOnly('e1', 29, 29, 100)
+    const newer = baselineOnly('e2', 0, 29, 200)
     newer.experiment = { ...newer.experiment, driver: { kind: 'model', provider: 'deepseek-official', model: 'deepseek-v4-pro' } }
     const row = buildInsights([older, newer], OPTIONS).rows[0]
     expect(row?.cells['baseline:deepseek-official/deepseek-flash']).toMatchObject({ value: 1, earlier: true })
@@ -417,7 +443,7 @@ describe('insights', () => {
   })
 
   it('never marks a judged mean score saturated', () => {
-    const row = { benchmark: 'mt-bench', category: 'preference' as const, name: 'MT-Bench', metric: 'score' as const, saturated: false, latest: 'e', cells: { b: { value: 0.95, runs: 20, experiment: 'e', endedAt: 1 } } }
+    const row = { benchmark: 'mt-bench', category: 'preference' as const, name: 'MT-Bench', metric: 'score' as const, saturated: false, latest: 'e', cells: { b: { value: 1, runs: 30, items: 30, passedItems: 30, experiment: 'e', endedAt: 1 } } }
     const columns = [{ id: 'b', kind: 'baseline' as const, driver: 'd' }]
     expect(saturatedRow(row, columns)).toBe(false)
     expect(saturatedRow({ ...row, metric: 'pass' }, columns)).toBe(true)

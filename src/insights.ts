@@ -29,6 +29,10 @@ export interface ScoreCell {
   value: number
   /** Valid runs behind the value. */
   runs: number
+  /** Items with at least one valid run. */
+  items: number
+  /** Items whose every valid run passed. */
+  passedItems: number
   /** Verdict against the same experiment's baseline, for plugin columns. */
   verdict?: Verdict
   /** Difference against that baseline. */
@@ -56,17 +60,48 @@ export interface ScoreRow {
   latest: string
 }
 
-/** Baseline success at or above this reads as saturated. */
+/** A benchmark reads as saturated when the baseline's pass rate is at least this, at the confidence below. */
 export const SATURATION_SUCCESS = 0.9
-/** Fewest valid baseline runs that can show saturation. */
-export const SATURATION_MIN_RUNS = 10
+/** One-sided confidence of that bound: all 29 of 29 items passing is the smallest sample that clears 0.9. */
+export const SATURATION_CONFIDENCE = 0.95
+
+/**
+ * One-sided Clopper–Pearson lower bound of a binomial proportion: the p at
+ * which seeing `k` or more successes in `n` has probability `1 − confidence`.
+ * @param k - successes.
+ * @param n - trials.
+ * @param confidence - one-sided confidence.
+ * @returns the bound in [0, 1].
+ */
+export function binomialLowerBound(k: number, n: number, confidence: number): number {
+  if (k <= 0 || n <= 0) return 0
+  const tail = (p: number): number => {
+    let sum = 0
+    let log = 0
+    // Sum P(X = i) for i ≥ k, building log C(n, i) incrementally.
+    for (let i = 1; i <= n; i += 1) {
+      log += Math.log(n - i + 1) - Math.log(i)
+      if (i >= k) sum += Math.exp(log + i * Math.log(p) + (n - i) * Math.log1p(-p))
+    }
+    return sum
+  }
+  let low = 0
+  let high = 1
+  for (let step = 0; step < 60; step += 1) {
+    const mid = (low + high) / 2
+    if (tail(mid) < 1 - confidence) low = mid
+    else high = mid
+  }
+  return low
+}
 
 /**
  * Whether a scoreboard row shows its benchmark saturated: a baseline cell from
- * the row's latest experiment (not an earlier one) with at least
- * `SATURATION_MIN_RUNS` valid runs at `SATURATION_SUCCESS` or more. Only
- * pass-rate rows qualify; a judge's mean score near 0.9 is not saturation.
- * The result never changes the benchmark's declared tier.
+ * the row's latest experiment (not an earlier one) whose items passing on every
+ * valid run give a one-sided `SATURATION_CONFIDENCE` lower bound of at least
+ * `SATURATION_SUCCESS`. It counts items, not runs, since repetitions of one
+ * item are not independent. Only pass-rate rows qualify; a judge's mean score
+ * near 0.9 is not saturation. The result never changes the benchmark's declared tier.
  * @param row - the scoreboard row.
  * @param columns - the scoreboard columns.
  * @returns whether the row is saturated.
@@ -75,7 +110,7 @@ export function saturatedRow(row: ScoreRow, columns: readonly ScoreColumn[]): bo
   if (row.metric !== 'pass') return false
   return columns.some((column) => {
     const cell = row.cells[column.id]
-    return column.kind === 'baseline' && cell !== undefined && cell.earlier !== true && cell.runs >= SATURATION_MIN_RUNS && cell.value >= SATURATION_SUCCESS
+    return column.kind === 'baseline' && cell !== undefined && cell.earlier !== true && binomialLowerBound(cell.passedItems, cell.items, SATURATION_CONFIDENCE) >= SATURATION_SUCCESS
   })
 }
 
@@ -202,9 +237,14 @@ export function buildInsights(ledgers: readonly LedgerSnapshot[], options: Analy
       if (value === null) continue
       const comparison = analysis.comparisons.find(entry => entry.variant === summary.variant)
       const primary = comparison === undefined ? undefined : metric === 'score' ? comparison.score : comparison.success
+      const valid = records.filter(record => record.cell.variant === summary.variant && record.status !== 'invalid')
+      const items = new Map<string, boolean>()
+      for (const record of valid) items.set(record.cell.task, (items.get(record.cell.task) ?? true) && record.status === 'graded' && record.grade?.pass === true)
       row.cells[id] = {
         value,
         runs: summary.graded + summary.timeouts,
+        items: items.size,
+        passedItems: [...items.values()].filter(Boolean).length,
         experiment: experiment.id,
         endedAt,
         ...comparison === undefined ? {} : { verdict: comparison.verdict },

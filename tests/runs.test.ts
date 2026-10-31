@@ -14,6 +14,7 @@ import type { BenchJobStatus, BenchStartInput, BenchSuite, BenchTask, ModelPrice
 import type { JudgeReply } from '../src/judge.js'
 import type { ProviderPlugin } from '../src/providers.js'
 import * as catalog from '../src/catalog.js'
+import { permutation } from '../src/datasets.js'
 import { answerEvents, childEvents, rootEvents, writeSessions } from './sessions.js'
 
 const fakeDsh = fileURLToPath(new URL('./fixtures/fake-dsh.mjs', import.meta.url))
@@ -220,7 +221,10 @@ describe('BenchRunManager', () => {
     expect(experimentId).toBe('20261023-200000-dsh-native')
     const status = await settle(manager)
     expect(status).toMatchObject({ state: 'finished', total: 4, done: 4, maxUsd: 5 })
-    expect(status.runs.map(run => `${run.variant}:${run.outcome}`)).toEqual(['baseline:pass', 'acme-graph:pass', 'baseline:pass', 'acme-graph:pass'])
+    expect(status.runs.map(run => `${run.variant}:${run.outcome}`).sort()).toEqual(['acme-graph:pass', 'acme-graph:pass', 'baseline:pass', 'baseline:pass'])
+    // Each item's variants run in the order seeded by the experiment, item and repetition.
+    const variants = ['baseline', 'acme-graph']
+    expect(status.runs.map(run => run.variant)).toEqual((status.items ?? []).flatMap(task => permutation(2, catalog.seedOf(`${experimentId}\u0000${task}\u00000`)).map(index => variants[index])))
     expect(status.spentUsd).toBeGreaterThan(0)
     expect(status.log.join('\n')).toContain('using key [redacted]')
     const ledger = join(root, 'home', 'solar', 'bench', 'ledgers', experimentId)
@@ -436,8 +440,8 @@ describe('BenchRunManager', () => {
     process.env.FAKE_DSH_INACTIVE = '@acme/graph'
     await manager.start(form({ sample: 1, plugins: ['@acme/graph'] }))
     const status = await settle(manager)
-    expect(status.runs.map(run => `${run.variant}:${run.outcome}`)).toEqual(['baseline:pass', 'acme-graph:invalid'])
-    expect(status.runs[1]?.reason).toMatch(/plugin under test did not load: row \(@acme\/graph\): pending/)
+    expect(status.runs.map(run => `${run.variant}:${run.outcome}`).sort()).toEqual(['acme-graph:invalid', 'baseline:pass'])
+    expect(status.runs.find(run => run.variant === 'acme-graph')?.reason).toMatch(/plugin under test did not load: row \(@acme\/graph\): pending/)
   })
 
   it('blames the scheduling driver, not the variant, when a scheduling plugin does not load', async () => {
@@ -445,7 +449,7 @@ describe('BenchRunManager', () => {
     process.env.FAKE_DSH_INACTIVE = '@acme/graph'
     await manager.start(form({ sample: 1, plugins: ['dsh-cost-meter'], driver: { kind: 'scheduler', provider: 'deepseek-official', model: 'deepseek-flash', plugins: ['@acme/graph'] } }))
     const status = await settle(manager)
-    expect(status.runs.map(run => `${run.variant}:${run.outcome}`)).toEqual(['baseline:invalid', 'dsh-cost-meter:invalid'])
+    expect(status.runs.map(run => `${run.variant}:${run.outcome}`).sort()).toEqual(['baseline:invalid', 'dsh-cost-meter:invalid'])
     expect(status.runs.every(run => /^scheduling plugin did not load: row \(@acme\/graph\)/.test(run.reason ?? ''))).toBe(true)
   })
 
@@ -474,6 +478,36 @@ describe('BenchRunManager', () => {
     const status = await settle(manager)
     expect(status).toMatchObject({ state: 'stopped', done: 1 })
     expect(status.reason).toMatch(/spending limit reached/)
+  })
+
+  it('refuses a compared, scheduling or provider plugin whose bundle patch sets a row the experiment fixes', async () => {
+    const plugins: ProviderPlugin[] = [{ provider: 'graph-sub', plugin: '@acme/graph', label: 'Graph', billing: 'subscription', acknowledge: { zh: '会消耗订阅额度', en: 'spends quota' } }]
+    const manager = await mount({ providerPlugins: plugins, providerModels: provider => Promise.resolve(provider === 'graph-sub' ? [{ id: 'g-1' }] : []) })
+    const profile = join(root, 'home', 'profiles', 'desktop')
+    await writePlugin(profile, '@acme/graph', { version: '0.4.0', patch: "- id: tool-web\n  name: '@deepseek-ai/dsh-tool-web'\n  disabled: false\n" })
+    await expect(manager.start(form({ plugins: ['@acme/graph'] }))).rejects.toThrow(/BENCH_PLUGIN_PROTECTED: @acme\/graph sets tool-web/)
+    await expect(manager.start(form({ driver: { kind: 'scheduler', provider: 'deepseek-official', model: 'deepseek-flash', plugins: ['@acme/graph'] }, plugins: [] }))).rejects.toThrow(/BENCH_PLUGIN_PROTECTED/)
+    await expect(manager.start(form({ driver: { kind: 'model', provider: 'graph-sub', model: 'g-1' }, plugins: [], subscriptionAccepted: true }))).rejects.toThrow(/BENCH_PLUGIN_PROTECTED/)
+    await writePlugin(profile, '@acme/graph', { version: '0.4.0', patch: "- id: agent-default-model\n  config:\n    model: other\n- id: skill-filesystem\n  config:\n    agentsHome: /x\n" })
+    await expect(manager.start(form({ plugins: ['@acme/graph'] }))).rejects.toThrow(/sets agent-default-model, skill-filesystem/)
+    expect(manager.status().state).toBe('idle')
+  })
+
+  it('removes the copied template files of a run the stop killed', async () => {
+    const manager = await mount({ prompt: 'hang' })
+    process.env.FAKE_DSH_PID = join(root, 'child.pid')
+    const { experimentId } = await manager.start(form({ sample: 1, plugins: [] }))
+    let pid: number | undefined
+    for (let i = 0; i < 100 && pid === undefined; i += 1) {
+      pid = Number(await readFile(process.env.FAKE_DSH_PID, 'utf8').catch(() => '')) || undefined
+      if (pid === undefined) await new Promise(resolve => setTimeout(resolve, 50))
+    }
+    const [running] = manager.status().running
+    const home = join(root, 'home', 'solar', 'bench', 'ledgers', experimentId, 'cells', running?.variant as string, running?.task as string, '0', 'home')
+    expect(await readFile(join(home, '.env'), 'utf8')).toBe('NO_PROXY=localhost\n')
+    await manager.stop()
+    await expect(readFile(join(home, '.env'))).rejects.toThrow()
+    expect(await readFile(join(root, 'home', 'solar', 'bench', 'ledgers', experimentId, 'runs.jsonl'), 'utf8').catch(() => '')).toBe('')
   })
 
   it('refuses a second start, and stop kills the running child', async () => {

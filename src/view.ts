@@ -183,7 +183,7 @@ export function Detail({ detail, t, title }: { readonly detail: BenchExperimentD
   const { experiment } = detail
   const analysis = namedAnalysis(detail, t)
   const flaky = analysis.variants.filter(entry => entry.flakyTasks.length > 0)
-  const columns = ['variant', 'runs', 'success', 'anyRep', 'everyRep', 'unmeasurable', 'costPerRun', 'timePerRun'] as const
+  const columns = ['variant', 'runs', 'success', 'endToEnd', 'anyRep', 'everyRep', 'unmeasurable', 'costPerRun', 'timePerRun'] as const
   return h('div', { style: { display: 'grid', gap: 14, minWidth: 0 } }, [
     h('header', { key: 'head', style: { display: 'grid', gap: 4 } }, [
       h('h2', { key: 'title', style: { ...headingStyle, fontSize: 17 } }, title ?? fill(t('experimentHeading'), { id: experiment.id, suite: experiment.suite })),
@@ -208,6 +208,7 @@ export function Detail({ detail, t, title }: { readonly detail: BenchExperimentD
         h('th', { key: 'variant', scope: 'row', style: { ...cellStyle, fontWeight: 400 } }, entry.variant),
         h('td', { key: 'runs', style: numStyle }, String(entry.runs)),
         h('td', { key: 'success', style: numStyle }, percent(entry.successRate)),
+        h('td', { key: 'endToEnd', style: numStyle }, percent(entry.endToEndRate)),
         h('td', { key: 'any', style: numStyle }, percent(entry.passAnyRate)),
         h('td', { key: 'every', style: numStyle }, percent(entry.passAllRate)),
         h('td', { key: 'invalid', style: numStyle }, percent(entry.invalidRate)),

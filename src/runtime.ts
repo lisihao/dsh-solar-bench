@@ -17,7 +17,9 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { BenchSuite, BenchTask, BenchTaskId } from './types.js'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import z from '@deepseek-ai/schemastery'
+import { seedOf } from './catalog.js'
 import { cellEnv, prepareCell, readRunSessions, reapCellProcesses, scrubTemplateFiles } from './cell.js'
+import { permutation } from './datasets.js'
 import { finalText, parseAnswer } from './answer-graders.js'
 import type { JudgeReply } from './judge.js'
 import { cellKey, experimentFormatVersion, ExperimentLedger, listExperimentIds, readPinnedExperiment } from './ledger.js'
@@ -218,7 +220,10 @@ export class BenchRuntime extends Service {
     const pending: { cell: CellKey; task: BenchTask; variant: Variant }[] = []
     for (let rep = 0; rep < experiment.repetitions; rep += 1) {
       for (const task of tasks) {
-        for (const variant of experiment.variants) {
+        // Variants of one item run in a seeded order, so the baseline is not always first (server-side caches and
+        // drift would otherwise favor one side) and a resumed experiment keeps the same order.
+        const order = permutation(experiment.variants.length, seedOf(`${experiment.id}\u0000${task.id}\u0000${String(rep)}`))
+        for (const variant of order.map(index => experiment.variants[index] as Variant)) {
           const cell = { variant: variant.id, task: task.id, rep }
           if (!done.has(cellKey(cell))) pending.push({ cell, task, variant })
         }
@@ -229,10 +234,12 @@ export class BenchRuntime extends Service {
       for (let next = pending.shift(); next !== undefined; next = pending.shift()) {
         options.signal?.throwIfAborted()
         const record = await this.runCell(command, experiment, suite, ledger.dir, next, options)
-        options.signal?.throwIfAborted()
+        // A run that finished is recorded before a stop is honored: it has already spent money, and a missing record
+        // would run it again on resume. A run the stop killed throws out of runCell and is not recorded.
         await ledger.append(record)
         records.push(record)
         options.onProgress?.({ record, done: records.length, total })
+        options.signal?.throwIfAborted()
       }
     }
     const workers = Array.from({ length: Math.min(this.config.concurrency, pending.length) }, worker)
@@ -343,9 +350,10 @@ export class BenchRuntime extends Service {
       // A plugin of the run (a scheduling driver's daemon, for one) may outlive the child; the run directory names it.
       const reaped = await reapCellProcesses(dir).catch(() => [])
       if (reaped.length > 0) options.onOutput?.(job.cell, `stopped ${String(reaped.length)} leftover process(es) of this run: ${reaped.join(', ')}\n`)
+      // The copied credentials go even when the child failed to start or the stop killed it.
+      await scrubTemplateFiles(dirs.home, this.config.templateFiles)
     }
     const exit = { ...raw, output: redact(raw.output), head: redact(raw.head) }
-    await scrubTemplateFiles(dirs.home, this.config.templateFiles)
     const formatVersion = experimentFormatVersion(experiment)
     const base = { formatVersion, cell: job.cell, exitCode: exit.code, suiteVersion: suite.version, startedAt }
     // A row of the experiment's shared patches (a scheduling driver) failing is not the variant's fault.

@@ -8,6 +8,8 @@ import { BenchRegistry } from '../src/index.js'
 import type { BenchGrader, BenchSuite, BenchSuiteId, BenchTask, BenchTaskId } from '../src/index.js'
 import { BenchRuntime } from '../src/index.js'
 import type { RuntimeConfig as Config, Experiment, ExperimentId, RunProgress, VariantId } from '../src/index.js'
+import { seedOf } from '../src/catalog.js'
+import { permutation } from '../src/datasets.js'
 import { childEvents, rootEvents, writeSessions } from './sessions.js'
 
 const fakeDsh = fileURLToPath(new URL('./fixtures/fake-dsh.mjs', import.meta.url))
@@ -226,6 +228,31 @@ describe('BenchRuntime.run', () => {
     await expect(pending).rejects.toThrow()
     const runs = await readFile(join(root, 'ledger', 'exp', 'runs.jsonl'), 'utf8').catch(() => '')
     expect(runs).toBe('')
+  })
+
+  it('records a run that finished before the stop arrived, then stops', async () => {
+    const controller = new AbortController()
+    // The stop lands while the first run is being graded, after its child already finished and spent money.
+    const stopping: BenchGrader = { kind: 'stopping', version: 1, validate: () => {}, grade: () => { controller.abort(new Error('stop')); return Promise.resolve({ pass: true, score: 1, details: '' }) } }
+    await mount([task('t1', 'write:out.txt:yes', { grader: { kind: 'stopping' } })], { concurrency: 1 })
+    ctx.solarBenchmarks.registerGrader(stopping)
+    await expect(ctx.solarBenchRuntime.run(experiment({ repetitions: 1 }), { signal: controller.signal })).rejects.toThrow(/stop/)
+    const runs = (await readFile(join(root, 'ledger', 'exp', 'runs.jsonl'), 'utf8')).split('\n').filter(Boolean)
+    expect(runs).toHaveLength(1)
+    expect(JSON.parse(runs[0] as string)).toMatchObject({ status: 'graded', grade: { pass: true } })
+  })
+
+  it('runs each item\'s variants in a seeded order that a rerun repeats', async () => {
+    await mount([task('t1', 'write:out.txt:yes'), task('t2', 'write:out.txt:yes'), task('t3', 'write:out.txt:yes')], { concurrency: 1 })
+    const first = (await ctx.solarBenchRuntime.run(experiment({ repetitions: 1 }))).map(record => `${record.cell.task}/${record.cell.variant}`)
+    await ctx.fiber.dispose()
+    await rm(join(root, 'ledger'), { recursive: true, force: true })
+    await mount([task('t1', 'write:out.txt:yes'), task('t2', 'write:out.txt:yes'), task('t3', 'write:out.txt:yes')], { concurrency: 1 })
+    const second = (await ctx.solarBenchRuntime.run(experiment({ repetitions: 1 }))).map(record => `${record.cell.task}/${record.cell.variant}`)
+    expect(second).toEqual(first)
+    const variants = experiment().variants.map(variant => variant.id as string)
+    const firstOfEach = ['t1', 't2', 't3'].map(id => first.find(entry => entry.startsWith(`${id}/`)))
+    expect(firstOfEach).toEqual(['t1', 't2', 't3'].map(id => `${id}/${variants[permutation(variants.length, seedOf(`exp\u0000${id}\u00000`))[0] as number] as string}`))
   })
 
   it('fails a run whose launcher cannot start', async () => {

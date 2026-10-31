@@ -76,6 +76,7 @@ export function describeComparison(comparison: Comparison, variants: readonly Va
     case 'equivalent':
       return `no meaningful difference: success ${points(success.delta)}, within ±${(options.margin * 100).toFixed(1)} pts (${interval})`
     case 'underpowered': {
+      if (success.discordant === 0 && success.tasks > 0) return `no difference on any of ${String(success.tasks)} paired tasks, which rules out only differences above about ${(Math.min(1, 3 / success.tasks) * 100).toFixed(1)} pts; about ${String(Math.ceil(3 / options.margin))} tasks are needed to call them equivalent`
       const mde = success.mde === null ? '' : `; differences under about ${(success.mde * 100).toFixed(1)} pts cannot be detected`
       return `not enough evidence either way: success ${points(success.delta)} (${interval})${mde}. Add tasks or repetitions.`
     }

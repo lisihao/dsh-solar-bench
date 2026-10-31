@@ -20,7 +20,7 @@ import type { BenchTier, Bilingual, CategoryId } from './catalog.js'
 import { permutation } from './datasets.js'
 import type { DatasetStore } from './datasets.js'
 import type { JudgeReply } from './judge.js'
-import { piAiOptions, piAiPatch, piAiRoutes, pluginRows, readProfilePatch, rowsPatch } from './providers.js'
+import { piAiOptions, piAiPatch, piAiRoutes, pluginRows, protectedRowsIn, readProfilePatch, rowsPatch } from './providers.js'
 import type { DriverOption, ProviderPlugin } from './providers.js'
 import type { BenchRegistry } from './registry.js'
 import type { BenchRuntime } from './runtime.js'
@@ -516,6 +516,11 @@ export class BenchRunManager {
     const secrets = Object.values(env)
     const carrier = model.plugin === undefined ? undefined : candidates.get(model.plugin)
     if (model.plugin !== undefined && carrier === undefined) throw new Error(`BENCH_PLUGIN_UNKNOWN: ${model.plugin} is not an enabled plugin of the source profile`)
+    // Every plugin patch is applied after the shared driver, web and skills patches, so one that sets those rows would silently change them.
+    for (const plugin of [...plugins, ...schedulers, ...carrier === undefined ? [] : [carrier]]) {
+      const rows = await protectedRowsIn(plugin.patch)
+      if (rows.length > 0) throw new Error(`BENCH_PLUGIN_PROTECTED: ${plugin.name} sets ${rows.join(', ')}, which the experiment fixes for every group`)
+    }
     const stamp = (this.deps.now?.() ?? new Date()).toISOString().replace(/[-:]/g, '').replace(/\..*$/, '').replace('T', '-')
     const id = `${stamp}-${entry.id}`
     const controller = new AbortController()

@@ -58,6 +58,14 @@ export declare class JsExpression {
     readonly source: string;
     constructor(source: string);
 }
+/** Rows every group of an experiment shares and a plugin's bundle patch may not set: the driver model, the web-tool switch and the skill loader. */
+export declare const PROTECTED_ROWS: readonly string[];
+/**
+ * The protected rows a bundle patch sets at its top level.
+ * @param file - the patch file.
+ * @returns the row ids found, in file order.
+ */
+export declare function protectedRowsIn(file: string): Promise<string[]>;
 /** One row of a profile patch. */
 export interface PatchRow {
     id?: string;

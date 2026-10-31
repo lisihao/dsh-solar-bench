@@ -25,9 +25,11 @@ export declare function parseAnswer(text: string): string | undefined;
  */
 export declare function choiceLetter(answer: string): string | undefined;
 /**
- * A number from an answer, ignoring `,`, `$`, `%`, units after the number, and a trailing period.
+ * A number from an answer, ignoring `,`, `$`, `%`, unit words after the number, and a trailing period.
+ * Anything after the number that holds a digit or a math sign (`6/2`, `42+1`, `42 (approx)`) makes the
+ * answer unparsable rather than reading its first number.
  * @param answer - the answer text.
- * @returns the value, or `undefined` when no number parses.
+ * @returns the value, or `undefined` when the answer is not one number.
  */
 export declare function numberOf(answer: string): number | undefined;
 /**
@@ -52,7 +54,7 @@ export declare function mathEquivalent(given: string, key: string): boolean;
 export declare function normalizeExact(text: string): string;
 /** `answer-choice`: the letter equals the key. */
 export declare const choiceGrader: BenchGrader;
-/** `answer-number`: numeric equality. */
+/** `answer-number`: numeric equality. Version 2 refuses expressions such as `6/2` instead of reading their first number. */
 export declare const numberGrader: BenchGrader;
 /** `answer-math`: {@link mathEquivalent}. */
 export declare const mathGrader: BenchGrader;

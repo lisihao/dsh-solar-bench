@@ -57,6 +57,7 @@ export declare const en: {
     readonly explainRegressed: "Success rate {delta} across {tasks} tasks ({level}% interval {low} to {high}).";
     readonly explainEquivalent: "Success rate {delta}, within ±{margin} ({level}% interval {low} to {high}).";
     readonly explainUnderpowered: "Success rate {delta} ({level}% interval {low} to {high}). Differences under about {mde} cannot be detected yet; add tasks or repetitions.";
+    readonly explainUnobserved: "No difference on any of the {tasks} paired tasks, but that rules out only differences above about {bound}; about {need} tasks are needed to call them equivalent within {margin}.";
     readonly explainInsufficient: "{tasks} tasks could be compared; at least {min} are needed.";
     readonly explainUnreliable: "Unmeasurable runs differ: {variant} {here}, baseline {base}. Check the run errors before reading the result.";
     readonly costDelta: "Cost per task {value}";
@@ -65,6 +66,7 @@ export declare const en: {
     readonly variant: "Variant";
     readonly runs: "Runs";
     readonly success: "Success";
+    readonly endToEnd: "End to end";
     readonly anyRep: "Passed once";
     readonly everyRep: "Passed every time";
     readonly unmeasurable: "Unmeasurable";

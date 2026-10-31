@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { BenchSuiteId, BenchTaskId } from '../src/index.js'
 import { analyzeExperiment } from '../src/index.js'
+import { describeComparison } from '../src/format.js'
+import { en } from '../src/locales.js'
 import type { AnalysisOptions, Experiment, ExperimentId, RunMetrics, RunRecord, RunStatus, VariantId } from '../src/index.js'
 
 const options: AnalysisOptions = { confidence: 0.95, resamples: 2000, seed: 7, margin: 0.05, minTasks: 10, invalidTolerance: 0.1 }
@@ -63,11 +65,35 @@ describe('analyzeExperiment comparisons', () => {
     expect(analysis.comparisons.find(entry => entry.variant === 'minus')!.verdict).toBe('regressed')
   })
 
-  it('calls identical variants equivalent, never significant', () => {
-    const records = grid(['base', 'same'], 40, 1, (_variant, task) => task % 2 === 0)
+  it('calls identical variants equivalent only when enough tasks bound the difference', () => {
+    // No task differs, so the bootstrap interval is [0, 0] at any size; the rule of three needs 3 / margin tasks.
+    const need = Math.ceil(3 / options.margin)
+    const records = grid(['base', 'same'], need, 1, (_variant, task) => task % 2 === 0)
     const same = analyzeExperiment(experiment('base', 'same'), records, options).comparisons[0]!
-    expect(same.success).toMatchObject({ delta: 0, low: 0, high: 0, tasks: 40 })
+    expect(same.success).toMatchObject({ delta: 0, low: 0, high: 0, tasks: need, discordant: 0 })
     expect(same.verdict).toBe('equivalent')
+    const few = analyzeExperiment(experiment('base', 'same'), grid(['base', 'same'], need - 1, 1, (_variant, task) => task % 2 === 0), options).comparisons[0]!
+    expect(few.success).toMatchObject({ low: 0, high: 0, discordant: 0 })
+    expect(few.verdict).toBe('underpowered')
+  })
+
+  it('says how far agreement on few tasks goes instead of calling it equivalent', () => {
+    const records = grid(['base', 'same'], 20, 1, (_variant, task) => task % 2 === 0)
+    const analysis = analyzeExperiment(experiment('base', 'same'), records, options)
+    const text = describeComparison(analysis.comparisons[0]!, analysis, key => en[key])
+    expect(text.detail).toBe('No difference on any of the 20 paired tasks, but that rules out only differences above about 15.0 pts; about 60 tasks are needed to call them equivalent within 5.0 pts.')
+  })
+
+  it('counts the cost of unmeasurable runs and reports the end-to-end success rate', () => {
+    const records = [
+      run('base', 't0', 0, true, { cost: 0.01 }),
+      run('base', 't1', 0, false, { cost: 0.01 }),
+      { ...run('base', 't2', 0, false), status: 'invalid' as const, metrics: metrics(0.04, 100), error: 'model unavailable: AUTH' },
+      run('base', 't3', 0, true, { cost: 0.01 }),
+    ]
+    const [summary] = analyzeExperiment(experiment('base'), records, options).variants
+    expect(summary).toMatchObject({ runs: 4, invalid: 1, successRate: 2 / 3, endToEndRate: 0.5, pricedRuns: 4 })
+    expect(summary?.meanCostUsd).toBeCloseTo(0.0175, 10)
   })
 
   it('calls a tight interval inside the margin equivalent even when the MDE exceeds the margin', () => {

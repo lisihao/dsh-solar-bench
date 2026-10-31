@@ -337,6 +337,8 @@ export interface Estimate {
     mde: number | null;
     /** Tasks contributing a difference. */
     tasks: number;
+    /** Tasks whose difference is not zero. */
+    discordant: number;
 }
 /**
  * How a variant's success rate compares with the baseline.
@@ -377,13 +379,15 @@ export interface VariantSummary {
     invalidRate: number;
     /** Passing runs over graded and timed-out runs; `null` when there are none. */
     successRate: number | null;
+    /** Passing runs over every run, unmeasurable ones counted as not passing; `null` when there are none. */
+    endToEndRate: number | null;
     /** Tasks with at least one passing run, over tasks with a valid run. */
     passAnyRate: number | null;
     /** Tasks whose every valid run passed, over tasks with a valid run. */
     passAllRate: number | null;
     /** Mean grade score over graded and timed-out runs (a timeout scores 0); `null` when there are none. */
     meanScore: number | null;
-    /** Mean cost over runs carrying `costUsd`, judge cost included. */
+    /** Mean cost over runs carrying `costUsd`, unmeasurable runs and judge cost included. */
     meanCostUsd: number | null;
     /** Runs carrying `costUsd`. */
     pricedRuns: number;

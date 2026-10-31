@@ -136,7 +136,7 @@ The form, per benchmark card:
 - **Driver**: a DeepSeek model, a local OpenAI-compatible route of the source profile (unbilled after confirmation), a subscription provider plugin such as ChatGPT Web (after accepting the quota use), or smart scheduling. The judge is chosen separately among the DeepSeek models.
   - A model driver writes a patch that sets `agent-default-model` to `{ provider, model }`. v2 offers the `deepseek-official` models from the `drivers` config (`deepseek-flash`, `deepseek-v4-pro` by default), because the run profile carries only `dsh-base` and `dsh-headless` and the key path is the DeepSeek key.
   - Smart scheduling loads the selected installed scheduling plugins (for example native-collaboration and native-resident) into every variant, baseline included, on top of the default model. Which plugins count as "smart scheduling" is the maintainer's decision (open question 1). Observed 2026-10-28: native-resident 0.1.0-dev.0 does not activate in a run home, because its daemon socket path under `$DSH_HOME` exceeds the 104-byte macOS limit; native-collaboration does.
-- **Global skills**: on by default, matching daily use; unchecked, a shared patch points `skill-filesystem`'s `agentsHome` at an empty directory so `~/.agents/skills` stays out of every request. Recorded as `globalSkills` (format 3) and part of the scoreboard column and cost-history keys. On GSM8K the catalog was most of a flash run's ~78k input tokens; a stub-model probe measured the first request at 410,783 bytes with it and 23,951 without, and a paid 10-item flash run without it cost $0.00028 per item, against about $0.022 with it.
+- **Global skills**: off by default since 2026-10-31 (on before), since comparisons are cleaner and far cheaper without them; checked, runs mirror daily use; unchecked, a shared patch points `skill-filesystem`'s `agentsHome` at an empty directory so `~/.agents/skills` stays out of every request. Recorded as `globalSkills` (format 3) and part of the scoreboard column and cost-history keys. On GSM8K the catalog was most of a flash run's ~78k input tokens; a stub-model probe measured the first request at 410,783 bytes with it and 23,951 without, and a paid 10-item flash run without it cost $0.00028 per item, against about $0.022 with it.
 - **Compare**: the baseline (no third-party plugin) and any installed plugins, each a variant.
 - **Repetitions**.
 - **Budget (USD)**: required. The run stops when priced spend exceeds it, or when a run used a model with no price row.
@@ -160,7 +160,7 @@ Every benchmark asks for a final line `ANSWER: <value>` (code benchmarks ask for
 | Grader | Rule |
 |---|---|
 | `choice` | Letter equals the key. |
-| `number` | Numeric equality after removing `,`, `$`, `%` and trailing `.0`; GSM8K's key is the text after `####`. |
+| `number` | Version 2: one number after removing `,`, `$`, `%` and spaces; a digit or math sign after it (`6/2`, `42+1`) makes the answer unparsable, unit words are allowed; then numeric equality. GSM8K's key is the text after `####`. |
 | `math-equiv` | MATH-500: strip `\boxed{}`, `\left`/`\right`, `\!`, spaces, `^\circ`, `\text{…}` units and `$`; normalize `\dfrac`/`\tfrac` to `\frac`; compare strings, then compare as numbers when both parse (fractions included). This is narrower than symbolic equivalence and under-counts some correct answers; the UI says so. |
 | `exact` | Case- and whitespace-normalized equality (BBH). |
 | `python-tests` | Runs the dataset's tests against `solution.py` with the bundled Python, 60 s limit. |
@@ -185,7 +185,7 @@ The Overview tab reads every ledger and answers four questions, each with the ev
 | Question | Measure |
 |---|---|
 | Does each plugin work? | Load failures (runs recorded as "plugin did not load"), invalid and timeout rates, tool error rate, per plugin version. |
-| Does it help? | Paired success (or score) difference against the same experiment's baseline with a bootstrap interval and verdict, per benchmark and per category. |
+| Does it help? | Paired success (or score) difference against the same experiment's baseline with a bootstrap interval and verdict, per benchmark and per category. With no differing task the interval is [0, 0], so "equivalent" then needs at least 3 / margin tasks (rule of three). Timeouts count as failures; unmeasurable runs are left out of success rates, counted in cost, and counted as not passing in the end-to-end rate. |
 | Does it improve cost or speed? | Paired token, cost and wall-time differences; cost per solved item. |
 | Does it improve over time? | Per plugin, its verdicts and differences across experiments ordered by plugin version and date. This is a cross-version, cross-experiment trend. |
 

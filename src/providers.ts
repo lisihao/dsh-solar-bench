@@ -93,6 +93,20 @@ const JS_TAG = {
   stringify: (item: { value?: unknown }) => (item.value as JsExpression).source,
 }
 
+/** Rows every group of an experiment shares and a plugin's bundle patch may not set: the driver model, the web-tool switch and the skill loader. */
+export const PROTECTED_ROWS: readonly string[] = ['agent-default-model', 'tool-web', 'skill-filesystem']
+
+/**
+ * The protected rows a bundle patch sets at its top level.
+ * @param file - the patch file.
+ * @returns the row ids found, in file order.
+ */
+export async function protectedRowsIn(file: string): Promise<string[]> {
+  const value = parse(await readFile(file, 'utf8'), { customTags: [JS_TAG] }) as unknown
+  if (!Array.isArray(value)) return []
+  return value.flatMap(row => row !== null && typeof row === 'object' && typeof (row as PatchRow).id === 'string' && PROTECTED_ROWS.includes((row as PatchRow).id as string) ? [(row as PatchRow).id as string] : [])
+}
+
 /** One row of a profile patch. */
 export interface PatchRow {
   id?: string

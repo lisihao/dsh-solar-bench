@@ -50,15 +50,17 @@ export function choiceLetter(answer: string): string | undefined {
 }
 
 /**
- * A number from an answer, ignoring `,`, `$`, `%`, units after the number, and a trailing period.
+ * A number from an answer, ignoring `,`, `$`, `%`, unit words after the number, and a trailing period.
+ * Anything after the number that holds a digit or a math sign (`6/2`, `42+1`, `42 (approx)`) makes the
+ * answer unparsable rather than reading its first number.
  * @param answer - the answer text.
- * @returns the value, or `undefined` when no number parses.
+ * @returns the value, or `undefined` when the answer is not one number.
  */
 export function numberOf(answer: string): number | undefined {
   const cleaned = answer.replace(/[,$%\s]/g, '').replace(/\\!/g, '')
-  const match = /^[+-]?(\d+(\.\d*)?|\.\d+)(e[+-]?\d+)?/i.exec(cleaned)
-  if (match === null) return undefined
-  const value = Number(match[0])
+  const match = /^([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)(.*)$/i.exec(cleaned)
+  if (match === null || /[\d+\-*/^=()[\]{}\\]/.test(match[2] as string)) return undefined
+  const value = Number(match[1])
   return Number.isFinite(value) ? value : undefined
 }
 
@@ -134,13 +136,14 @@ const keyed = (kind: string) => z.object({ kind: z.literal(kind), answer: z.stri
  * An answer grader: parse the final `ANSWER:` line, then compare it with the key.
  * @param kind - grader kind.
  * @param match - comparison.
+ * @param schema - spec schema; `{ kind, answer }` by default.
+ * @param version - grader version recorded on each run.
  * @returns the grader.
  */
-function answerGrader(kind: string, match: (answer: string, key: string) => boolean): BenchGrader {
-  const schema = keyed(kind)
+function answerGrader(kind: string, match: (answer: string, key: string) => boolean, schema = keyed(kind), version = 1): BenchGrader {
   return {
     kind,
-    version: 1,
+    version,
     validate: spec => void parse(schema, spec),
     grade: (spec, input) => {
       const { answer: key } = parse(schema, spec)
@@ -154,12 +157,12 @@ function answerGrader(kind: string, match: (answer: string, key: string) => bool
 /** `answer-choice`: the letter equals the key. */
 export const choiceGrader = answerGrader('answer-choice', (answer, key) => choiceLetter(answer) === key.trim().toUpperCase())
 
-/** `answer-number`: numeric equality. */
+/** `answer-number`: numeric equality. Version 2 refuses expressions such as `6/2` instead of reading their first number. */
 export const numberGrader = answerGrader('answer-number', (answer, key) => {
   const a = numberOf(answer)
   const b = numberOf(key)
   return a !== undefined && b !== undefined && Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(b))
-})
+}, keyed('answer-number'), 2)
 
 /** `answer-math`: {@link mathEquivalent}. */
 export const mathGrader = answerGrader('answer-math', mathEquivalent)
@@ -187,7 +190,9 @@ export function pythonTestsGrader(python: string): BenchGrader {
       await writeFile(join(input.workspace, CHECK_FILE), `import sys\nsys.path.insert(0, '.')\n${program}`)
       const outcome = await new Promise<{ code: number | null; output: string }>((resolve, reject) => {
         // -B: a stale __pycache__ of an earlier solution.py with the same size and mtime second would be imported instead.
-        const child = spawn(python, ['-I', '-B', CHECK_FILE], { cwd: input.workspace, stdio: ['ignore', 'pipe', 'pipe'], ...input.signal === undefined ? {} : { signal: input.signal } })
+        // The program under test sees only a minimal environment, not the host's variables.
+        const env = { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: input.workspace, LANG: 'en_US.UTF-8' }
+        const child = spawn(python, ['-I', '-B', CHECK_FILE], { cwd: input.workspace, env, stdio: ['ignore', 'pipe', 'pipe'], ...input.signal === undefined ? {} : { signal: input.signal } })
         let output = ''
         const collect = (chunk: Buffer): void => { output = (output + chunk.toString('utf8')).slice(-2000) }
         child.stdout.on('data', collect)

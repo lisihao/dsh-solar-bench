@@ -407,7 +407,7 @@ export class BenchRuntime extends Service {
     // Models the user declared not billed per token (a self-hosted server, a subscription) are priced at zero for this experiment only.
     const prices = [...(experiment.unbilledModels ?? []).map(model => ({ model, input: 0, output: 0, cacheRead: 0 })), ...this.config.prices]
     const { metrics, models } = foldRunMetrics(sessions.root, sessions.children, prices)
-    const surfaced = { formatVersion: LEDGER_FORMAT_VERSION_5, surface: foldRunSurface(sessions.root, sessions.children) } as const
+    const surfaced = { formatVersion: LEDGER_FORMAT_VERSION_5, surface: foldRunSurface(sessions.root, sessions.children, dir) } as const
     const unavailable = providerFailure(sessions.root, this.config.providerFailureCodes)
     if (unavailable !== undefined) return { ...base, ...surfaced, status: 'invalid', metrics, models, error: `model unavailable: ${unavailable}`, endedAt: Date.now() }
     if (exit.timedOut) return { ...base, ...surfaced, status: 'timeout', metrics, models, endedAt: Date.now() }

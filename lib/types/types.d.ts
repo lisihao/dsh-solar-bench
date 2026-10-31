@@ -284,10 +284,12 @@ export interface JudgeUsage {
  * comparing a plugin's runs with the same experiment's baseline.
  */
 export interface RunSurface {
-    /** Tool names offered to the model in any request of the root session, sorted. */
-    tools: readonly string[];
+    /** Tool names offered to the model in the root session, each with the first 16 hex digits of the SHA-256 of its schema as last offered. */
+    tools: Readonly<Record<string, string>>;
     /** SHA-256 (hex) of the root session's system prompts in log order. */
     system: string;
+    /** SHA-256 (hex) of the root session's user and developer messages before the first assistant message (the task, the runtime context, and any catalog or memory a plugin adds), with the run's own directory replaced by a placeholder. */
+    context: string;
     /** Counts of `hook/invoked`, `model/selection`, `compaction/start` and `developer/message` events across all sessions; absent kinds are omitted. */
     events: Readonly<Record<string, number>>;
 }

@@ -179,7 +179,7 @@ Each grader has a conformance pair (a correct answer passes, a wrong one fails) 
 
 - `datasets/<benchmark>/<revision>.json`: `{ formatVersion: 1, benchmark, source, revision, fetchedAt, rows }`. A reader refuses another version with `BENCH_DATASET_FORMAT`.
 - `ledgers/<experiment>/experiment.json`: `formatVersion: 2` adds `benchmark` (id, source, revision, item ids), `driver`, `shared` (patches applied to every variant: driver, scheduling, web off), `budgetUsd`, `webTools`; `formatVersion: 3` adds `globalSkills`. Version 1 and 2 ledgers still read; any other version fails with `BENCH_EXPERIMENT_FORMAT`.
-- `ledgers/<experiment>/runs.jsonl`: run records at their experiment's format version, except that a record whose session log was read is format 5 and carries `surface` (offered tool names, a system-prompt digest, counts of hook, model-selection, compaction and developer-message events; roadmap 2.3, 2026-10-31); version 2 to 5 records may carry the judge's usage and the parsed answer.
+- `ledgers/<experiment>/runs.jsonl`: run records at their experiment's format version, except that a record whose session log was read is format 5 and carries `surface` (offered tools with schema digests, a system-prompt digest, an opening-context digest, counts of hook, model-selection, compaction and developer-message events; roadmap 2.3, 2026-10-31); version 2 to 5 records may carry the judge's usage and the parsed answer.
 
 ## 6. Analysis
 

@@ -9,6 +9,7 @@
 import { defineTool, type ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { ADAPTATIONS, BLOCKERS, CATALOG, catalogEntry, CATEGORY_IDS, PROTOCOL_NOTE, protocolOf, resultProtocol } from './catalog.js'
 import type { BenchLedgersApi } from './contracts.js'
+import { pluginExposure } from './exposure.js'
 import type { RunRecord } from './types.js'
 
 /** Names of the tools, in registration order. */
@@ -111,7 +112,7 @@ export function createBenchTools(ledgers: BenchLedgersApi): ToolDefinition[] {
     }),
     defineTool({
       name: 'bench_compare',
-      description: 'Compare each plugin of one experiment with its baseline: verdict, paired difference with its interval, paired tasks and how many differed, success and end-to-end rates, unmeasurable rate, cost and time. Read-only; the numbers come from the recorded runs.',
+      description: 'Compare each plugin of one experiment with its baseline: verdict, paired difference with its interval, paired tasks and how many differed, success and end-to-end rates, unmeasurable rate, cost and time, and whether the plugin was exercised (exposure: exercised, unused or unrecorded; an unused plugin was not tested, whatever its verdict). Read-only; the numbers come from the recorded runs.',
       parameters: {
         experiment: { type: 'string', required: true, description: 'Experiment id, from bench_results.' },
       },
@@ -144,6 +145,7 @@ export function createBenchTools(ledgers: BenchLedgersApi): ToolDefinition[] {
           comparisons: analysis.comparisons.map(comparison => ({
             variant: comparison.variant,
             verdict: comparison.verdict,
+            exposure: pluginExposure(records, comparison.variant, analysis.baseline),
             success: comparison.success,
             score: comparison.score,
             costUsd: comparison.costUsd === null ? null : { delta: comparison.costUsd.delta, low: comparison.costUsd.low, high: comparison.costUsd.high },

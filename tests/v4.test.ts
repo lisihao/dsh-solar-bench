@@ -214,6 +214,13 @@ describe('results view', () => {
       expect(html).not.toMatch(/>(baseline|plugin)</)
       expect(html).not.toMatch(/verdict[A-Z]|explain[A-Z]|\{(delta|tasks|variant)\}/)
     }
+    // With surfaces showing the plugin never left a trace, the comparison reads not tested instead of its verdict.
+    const surface = { tools: { bash: '0'.repeat(16) }, system: 'a'.repeat(64), context: 'c'.repeat(64), events: {} }
+    const idle = { ...detail, records: records.map(entry => ({ ...entry, formatVersion: 5 as const, surface })) }
+    const html = renderToStaticMarkup(createElement(Detail, { detail: idle, t: key => en[key] }))
+    expect(html).toContain(en.notTested)
+    expect(html).toContain('data-verdict="not-tested"')
+    expect(renderToStaticMarkup(createElement(Detail, { detail, t: key => en[key] }))).not.toContain(en.notTested)
   })
 })
 

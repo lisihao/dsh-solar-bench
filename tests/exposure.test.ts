@@ -11,23 +11,38 @@ import { foldRunSurface } from '../src/metrics.js'
 import type { AnalysisOptions, Experiment, RunRecord, RunSurface } from '../src/types.js'
 
 const event = (type: string, data: unknown): SessionEvent => ({ type, data, time: 0, seq: 0 }) as unknown as SessionEvent
-const header = (tools: string[]) => event('request/header', { header: { config: {}, tools: tools.map(name => ({ name, description: '', parameters: {} })) } })
+const header = (tools: string[], description = '') => event('request/header', { header: { config: {}, tools: tools.map(name => ({ name, description, parameters: {} })) } })
 const system = (text: string) => event('system/message', { turn: 1, step: 1, message: { role: 'system', content: [{ type: 'text', text }] } })
+const user = (text: string) => event('user/message', { role: 'user', content: [{ type: 'text', text }] })
+const developer = (text: string) => event('developer/message', { turn: 1, step: 1, message: { role: 'developer', content: [{ type: 'text', text }] } })
+const answer = event('assistant/message', { turn: 1, step: 1, message: { source: { model: 'm' }, content: [] } })
 
 describe('foldRunSurface', () => {
   it('collects offered tools, digests the system prompt and counts surface events across sessions', () => {
     const root = [system('You are an agent.'), header(['read', 'bash']), header(['bash', 'recall']), event('hook/invoked', {}), event('tool/call', {})]
     const child = [event('hook/invoked', {}), event('compaction/start', {}), header(['secret'])]
     const surface = foldRunSurface(root, [child])
-    expect(surface.tools).toEqual(['bash', 'read', 'recall'])
+    expect(Object.keys(surface.tools)).toEqual(['bash', 'read', 'recall'])
+    expect(Object.values(surface.tools).every(digest => /^[0-9a-f]{16}$/.test(digest))).toBe(true)
+    expect(foldRunSurface([header(['bash'], 'Run a command.')], []).tools.bash).not.toBe(foldRunSurface([header(['bash'], 'Run a shell command.')], []).tools.bash)
     expect(surface.system).toMatch(/^[0-9a-f]{64}$/)
     expect(surface.events).toEqual({ 'hook/invoked': 2, 'compaction/start': 1 })
     expect(foldRunSurface([system('You are an agent.')], []).system).toBe(surface.system)
     expect(foldRunSurface([system('You are an agent. Recall first.')], []).system).not.toBe(surface.system)
   })
+
+  it('digests the opening context up to the first answer, with the run directory replaced', () => {
+    const opening = (dir: string, extra: SessionEvent[] = []) => [user('Solve 2+2.'), user(`Current working directory: "${dir}/workspace".`), ...extra, answer, user('later notice')]
+    const baseline = foldRunSurface(opening('/l/cells/baseline/p0-1/0'), [], '/l/cells/baseline/p0-1/0').context
+    expect(foldRunSurface(opening('/l/cells/memory-plugin/p0-1/0'), [], '/l/cells/memory-plugin/p0-1/0').context).toBe(baseline)
+    expect(foldRunSurface(opening('/l/cells/memory-plugin/p0-1/0'), []).context).not.toBe(baseline)
+    expect(foldRunSurface(opening('/l/cells/m/p0-1/0', [developer('Recalled: the user prefers metric units.')]), [], '/l/cells/m/p0-1/0').context).not.toBe(baseline)
+    expect(foldRunSurface([...opening('/l/cells/m/p0-1/0'), user('another later message')], [], '/l/cells/m/p0-1/0').context).toBe(baseline)
+  })
 })
 
-const surface = (tools: string[], prompt = 'a'.repeat(64), events: Record<string, number> = {}): RunSurface => ({ tools, system: prompt, events })
+const surface = (tools: string[], prompt = 'a'.repeat(64), events: Record<string, number> = {}, context = 'c'.repeat(64), schema: Record<string, string> = {}): RunSurface =>
+  ({ tools: Object.fromEntries(tools.map(name => [name, schema[name] ?? '0'.repeat(16)])), system: prompt, context, events })
 const record = (variant: string, task: string, options: { surface?: RunSurface; calls?: Record<string, number>; pass?: boolean } = {}): RunRecord => ({
   formatVersion: options.surface === undefined ? 2 : 5,
   cell: { variant, task, rep: 0 },
@@ -65,6 +80,17 @@ describe('pluginExposure', () => {
       record('mem', 't1', { surface: surface(base, 'a'.repeat(64), { 'developer/message': 2 }) }),
     ]
     expect(pluginExposure(records, 'mem', 'baseline')).toEqual({ state: 'exercised', recorded: 3, exercised: 2, signals: ['prompt', 'events'] })
+  })
+
+  it('sees a changed schema of a tool the baseline also had, and a changed opening context of the same item', () => {
+    const records = [
+      record('baseline', 't1', { surface: surface(base) }),
+      record('baseline', 't2', { surface: surface(base, undefined, {}, 'd'.repeat(64)) }),
+      record('slim', 't1', { surface: surface(base, undefined, {}, undefined, { bash: '1'.repeat(16) }) }),
+      record('slim', 't2', { surface: surface(base, undefined, {}, 'c'.repeat(64)) }),
+      record('slim', 't1', { surface: surface([...base, 'search'], undefined, {}, undefined, { search: '2'.repeat(16) }) }),
+    ]
+    expect(pluginExposure(records, 'slim', 'baseline')).toEqual({ state: 'exercised', recorded: 3, exercised: 2, signals: ['schemas', 'context'] })
   })
 
   it('reads runs without a surface as not recorded, never as unused', () => {

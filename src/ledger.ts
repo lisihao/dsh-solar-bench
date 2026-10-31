@@ -121,8 +121,9 @@ const runRecordLine = z.object({
   judge: z.object({ calls: z.number().int().nonnegative(), tokens: z.number().nonnegative(), costUsd: z.number().nonnegative().optional() }).strict().optional(),
   answer: z.string().optional(),
   surface: z.object({
-    tools: z.array(z.string()),
+    tools: z.record(z.string(), z.string().regex(/^[0-9a-f]{16}$/)),
     system: z.string().regex(/^[0-9a-f]{64}$/),
+    context: z.string().regex(/^[0-9a-f]{64}$/),
     events: z.record(z.string(), z.number().int().nonnegative()),
   }).strict().optional(),
 }).strict()

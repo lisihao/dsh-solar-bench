@@ -134,24 +134,35 @@ export function foldRunMetrics(
 /** Session events whose count can show a plugin at work without a tool of its own. */
 export const SURFACE_EVENTS = ['hook/invoked', 'model/selection', 'compaction/start', 'developer/message'] as const
 
+const sha256 = (text: string): string => createHash('sha256').update(text).digest('hex')
+
 /**
- * Fold what the model was offered and shown in one run: the tool names of the
- * root session's request headers, a digest of its system prompts, and counts
- * of {@link SURFACE_EVENTS} across all sessions.
+ * Fold what the model was offered and shown in one run: each tool of the root
+ * session's request headers with a digest of its schema, a digest of its
+ * system prompts, a digest of the opening context, and counts of
+ * {@link SURFACE_EVENTS} across all sessions.
  * @param root - root session events in seq order.
  * @param children - subagent session event lists.
+ * @param runDir - the run's own directory, replaced by a placeholder in the opening context so runs of one item compare across groups.
  * @returns the run's surface.
  */
-export function foldRunSurface(root: readonly SessionEvent[], children: readonly (readonly SessionEvent[])[]): RunSurface {
-  const tools = new Set<string>()
+export function foldRunSurface(root: readonly SessionEvent[], children: readonly (readonly SessionEvent[])[], runDir?: string): RunSurface {
+  const tools: Record<string, string> = {}
   const system = createHash('sha256')
+  const context = createHash('sha256')
+  let answered = false
   for (const event of root) {
-    if (event.type === 'request/header') for (const tool of event.data.header.tools ?? []) tools.add(tool.name)
+    if (event.type === 'request/header') for (const tool of event.data.header.tools ?? []) tools[tool.name] = sha256(JSON.stringify(tool)).slice(0, 16)
     else if (event.type === 'system/message') system.update(`${JSON.stringify(event.data.message.content)}\n`)
+    else if (event.type === 'assistant/message') answered = true
+    else if (!answered && (event.type === 'user/message' || event.type === 'developer/message')) {
+      const text = JSON.stringify(event.type === 'user/message' ? event.data.content : event.data.message.content)
+      context.update(`${event.type}\n${runDir === undefined ? text : text.split(runDir).join('<run>')}\n`)
+    }
   }
   const events: Record<string, number> = {}
   for (const event of [root, ...children].flat()) {
     if ((SURFACE_EVENTS as readonly string[]).includes(event.type)) events[event.type] = (events[event.type] ?? 0) + 1
   }
-  return { tools: [...tools].sort(), system: system.digest('hex'), events }
+  return { tools: Object.fromEntries(Object.entries(tools).sort(([a], [b]) => a.localeCompare(b))), system: system.digest('hex'), context: context.digest('hex'), events }
 }

@@ -47,6 +47,7 @@ export declare const en: {
     readonly baselineNote: "Baseline: {variant}";
     readonly comparisonsTitle: "Compared with the baseline";
     readonly noComparisons: "This experiment has only a baseline, so there is nothing to compare.";
+    readonly notTested: "Not tested: the plugin loaded, but no run shows a trace of it at work, so its difference says nothing about it.";
     readonly verdictImproved: "Better than the baseline";
     readonly verdictRegressed: "Worse than the baseline";
     readonly verdictEquivalent: "No meaningful difference";

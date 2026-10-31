@@ -3,6 +3,7 @@
 import { createElement as h, type CSSProperties, type ReactElement, type ReactNode } from 'react'
 import type { BenchExperimentDetail } from './contracts.js'
 import { currentLanguage } from './locales.js'
+import { pluginExposure } from './exposure.js'
 import { describeComparison, dollars, fill, percent, seconds, type BenchT } from './format.js'
 import type { ExperimentAnalysis, VariantId } from './types.js'
 
@@ -191,12 +192,15 @@ export function Detail({ detail, t, title }: { readonly detail: BenchExperimentD
     ]),
     card('comparisons', t('comparisonsTitle'), analysis.comparisons.length === 0
       ? h('p', { key: 'none', style: mutedStyle }, t('noComparisons'))
-      : h('ul', { key: 'list', style: { display: 'grid', gap: 10, margin: 0, padding: 0, listStyle: 'none' } }, analysis.comparisons.map((comparison) => {
+      : h('ul', { key: 'list', style: { display: 'grid', gap: 10, margin: 0, padding: 0, listStyle: 'none' } }, analysis.comparisons.map((comparison, index) => {
         const text = describeComparison(comparison, analysis, t)
-        return h('li', { key: comparison.variant, 'data-verdict': comparison.verdict, style: { display: 'grid', gap: 4, minWidth: 0 } }, [
+        // The named analysis renames variants; the records keep the ids of the raw one, in the same order.
+        const raw = detail.analysis.comparisons[index]?.variant
+        const untested = raw !== undefined && pluginExposure(detail.records, raw, detail.analysis.baseline).state === 'unused'
+        return h('li', { key: comparison.variant, 'data-verdict': untested ? 'not-tested' : comparison.verdict, style: { display: 'grid', gap: 4, minWidth: 0 } }, [
           h('div', { key: 'head', style: { display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'baseline' } }, [
             h('strong', { key: 'variant', style: { overflowWrap: 'anywhere' } }, comparison.variant),
-            h('span', { key: 'headline' }, text.headline),
+            h('span', { key: 'headline' }, untested ? t('notTested') : text.headline),
           ]),
           h('p', { key: 'detail', style: { margin: 0, overflowWrap: 'anywhere' } }, text.detail),
           text.extras.length === 0 ? null : h('p', { key: 'extras', style: mutedStyle }, text.extras.join(' · ')),

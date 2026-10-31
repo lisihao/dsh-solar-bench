@@ -31,11 +31,13 @@ export declare function foldRunMetrics(root: readonly SessionEvent[], children: 
 /** Session events whose count can show a plugin at work without a tool of its own. */
 export declare const SURFACE_EVENTS: readonly ["hook/invoked", "model/selection", "compaction/start", "developer/message"];
 /**
- * Fold what the model was offered and shown in one run: the tool names of the
- * root session's request headers, a digest of its system prompts, and counts
- * of {@link SURFACE_EVENTS} across all sessions.
+ * Fold what the model was offered and shown in one run: each tool of the root
+ * session's request headers with a digest of its schema, a digest of its
+ * system prompts, a digest of the opening context, and counts of
+ * {@link SURFACE_EVENTS} across all sessions.
  * @param root - root session events in seq order.
  * @param children - subagent session event lists.
+ * @param runDir - the run's own directory, replaced by a placeholder in the opening context so runs of one item compare across groups.
  * @returns the run's surface.
  */
-export declare function foldRunSurface(root: readonly SessionEvent[], children: readonly (readonly SessionEvent[])[]): RunSurface;
+export declare function foldRunSurface(root: readonly SessionEvent[], children: readonly (readonly SessionEvent[])[], runDir?: string): RunSurface;

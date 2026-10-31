@@ -54,6 +54,14 @@ describe('analysis tools', () => {
     expect(reply).toMatchObject({ experiment: 'e1', benchmark: 'gsm8k', protocol: 'subset', settings: { globalSkills: false, webTools: null }, metric: 'pass' })
   })
 
+  it('tells in each comparison whether the plugin was exercised', async () => {
+    const surface = { tools: { bash: '0'.repeat(16) }, system: 'a'.repeat(64), context: 'c'.repeat(64), events: {} }
+    const surfaced = records.map(entry => ({ ...entry, formatVersion: 5, surface }) as RunRecord)
+    const api = ledgers({ detail: () => Promise.resolve({ experiment, records: surfaced, titles: {}, analysis: { metric: 'pass', baseline: 'baseline', options: {}, variants: [], comparisons: [{ variant: 'mem', verdict: 'equivalent', success: null, score: null, costUsd: null, wallMs: null, droppedTasks: [] }] } as never }) })
+    const reply = await run('bench_compare', { experiment: 'e1' }, api) as { comparisons: { verdict: string; exposure: { state: string; recorded: number } }[] }
+    expect(reply.comparisons[0]).toMatchObject({ verdict: 'equivalent', exposure: { state: 'unused', recorded: 2 } })
+  })
+
   it('traces failures first from recorded fields only', async () => {
     const failed = await run('bench_trace', { experiment: 'e1' }) as { matching: number; runs: Record<string, unknown>[] }
     expect(failed.matching).toBe(3)

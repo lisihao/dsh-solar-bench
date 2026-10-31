@@ -105,7 +105,9 @@ const verdictPill = (verdict: Verdict, key?: string): ReactElement => {
 
 const SIGNAL_TEXT: Readonly<Record<ExposureSignal, () => string>> = {
   tools: () => tx('调用了它自带的工具', 'its own tools were called'),
+  schemas: () => tx('工具说明和基线不同', 'tool descriptions differed from the baseline'),
   prompt: () => tx('系统提示和基线不同', 'the system prompt differed from the baseline'),
+  context: () => tx('开局上下文和同一题的基线不同', 'the opening context differed from the same item\'s baseline'),
   events: () => tx('钩子、选模型、压缩或开发者消息比基线多', 'more hooks, model selections, compactions or developer messages than the baseline'),
 }
 
